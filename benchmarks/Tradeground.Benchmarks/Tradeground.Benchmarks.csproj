@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Run with:  dotnet run -c Release --project benchmarks/Tradeground.Benchmarks -->
+  <!-- Run with: dotnet run -c Release (project benchmarks/Tradeground.Benchmarks). See README. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
   </PropertyGroup>

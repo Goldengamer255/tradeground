@@ -61,7 +61,7 @@ flowchart LR
 
 ## Running locally
 
-Requirements: [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0); Docker for the container stack.
+Requirements: [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0); Docker for the container stack.
 
 ```bash
 dotnet test

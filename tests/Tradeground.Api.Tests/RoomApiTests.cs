@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
 using Tradeground.Api.Endpoints;
 using Tradeground.Engine;
 using Tradeground.Game;
@@ -145,6 +146,7 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
 
     private static async Task<T> SendAsync<T>(
         HttpClient client, HttpMethod method, string url, object? body = null, string? traderKey = null, string? hostKey = null)
+        where T : class
     {
         using var response = await SendRawAsync(client, method, url, body, traderKey, hostKey);
         response.IsSuccessStatusCode.ShouldBeTrue($"{method} {url} returned {(int)response.StatusCode}");

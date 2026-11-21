@@ -3,7 +3,7 @@
 #   docker build -f src/Tradeground.Api/Dockerfile -t tradeground-api .
 
 # ---- Stage 1: build with the full SDK (~800 MB, thrown away afterwards) ----
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /repo
 
 # Copy only project files first and restore. Docker caches this layer, so NuGet packages
@@ -19,7 +19,7 @@ RUN dotnet publish src/Tradeground.Api/Tradeground.Api.csproj \
     --configuration Release --no-restore --output /app
 
 # ---- Stage 2: run with just the ASP.NET runtime (~220 MB) ----
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app .
 
