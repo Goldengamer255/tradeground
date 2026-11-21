@@ -1,0 +1,20 @@
+# Build output
+bin/
+obj/
+publish/
+
+# Test and benchmark output
+TestResults/
+coverage/
+BenchmarkDotNet.Artifacts/
+
+# IDEs
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Local secrets
+.env
+appsettings.*.local.json

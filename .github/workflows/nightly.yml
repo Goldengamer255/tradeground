@@ -1,0 +1,27 @@
+name: Nightly
+
+# Slow checks that would make every pull request wait: run them once a night instead.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    name: Engine benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Run benchmarks
+        run: dotnet run --configuration Release --project benchmarks/Tradeground.Benchmarks -- --filter "*" --exporters json markdown
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: BenchmarkDotNet.Artifacts

@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Pure domain library: no I/O, no framework dependencies. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tradeground.Engine.Tests" />
+  </ItemGroup>
+</Project>

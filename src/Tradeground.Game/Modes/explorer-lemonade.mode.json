@@ -1,0 +1,22 @@
+{
+  "id": "explorer-lemonade",
+  "name": "Lemonade Stand",
+  "audience": "Explorer",
+  "description": "At the end of the round, every jug of lemonade is worth 2 coins for each lemon in the six hidden crates. You get to peek inside one crate. Buy jugs if you think they're cheap, sell if you think they're expensive!",
+  "asset": {
+    "symbol": "LEMON",
+    "displayName": "Lemonade Jug",
+    "unit": "jugs"
+  },
+  "startingCash": 1000,
+  "maxPosition": 10,
+  "maxOrderQuantity": 5,
+  "roundSeconds": 240,
+  "hiddenValue": {
+    "diceCount": 6,
+    "diceSides": 10,
+    "valuePerPip": 2,
+    "privateClueTemplate": "You peeked into crate #{index}: it has {value} lemons!",
+    "publicClueTemplate": "Breaking news: crate #{index} has {value} lemons!"
+  }
+}

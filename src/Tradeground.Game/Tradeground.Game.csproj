@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Game rules on top of the engine. Still pure: no I/O except reading its own embedded mode files. -->
+  <ItemGroup>
+    <ProjectReference Include="..\Tradeground.Engine\Tradeground.Engine.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Modes\*.mode.json" />
+  </ItemGroup>
+</Project>

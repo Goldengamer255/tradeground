@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Run with:  dotnet run -c Release --project benchmarks/Tradeground.Benchmarks -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Tradeground.Engine\Tradeground.Engine.csproj" />
+  </ItemGroup>
+</Project>

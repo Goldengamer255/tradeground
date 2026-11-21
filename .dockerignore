@@ -1,0 +1,12 @@
+**/bin/
+**/obj/
+**/TestResults/
+**/BenchmarkDotNet.Artifacts/
+.git/
+.github/
+.vs/
+.vscode/
+.idea/
+tests/
+benchmarks/
+*.md

@@ -1,0 +1,22 @@
+{
+  "id": "trader-dice",
+  "name": "Ten Dice",
+  "audience": "Trader",
+  "description": "The contract settles at the sum of ten hidden six-sided dice. You see one die; others see theirs. Trade on what you know, and on what other people's trading tells you.",
+  "asset": {
+    "symbol": "DICE",
+    "displayName": "Ten Dice Contract",
+    "unit": "contracts"
+  },
+  "startingCash": 10000,
+  "maxPosition": 50,
+  "maxOrderQuantity": 20,
+  "roundSeconds": 300,
+  "hiddenValue": {
+    "diceCount": 10,
+    "diceSides": 6,
+    "valuePerPip": 1,
+    "privateClueTemplate": "Private clue: die #{index} rolled a {value}.",
+    "publicClueTemplate": "News: die #{index} rolled a {value}."
+  }
+}

@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <ItemGroup>
+    <ProjectReference Include="..\Tradeground.Game\Tradeground.Game.csproj" />
+  </ItemGroup>
+</Project>
