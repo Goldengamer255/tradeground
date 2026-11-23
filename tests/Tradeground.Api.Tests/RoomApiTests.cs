@@ -59,7 +59,9 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
         buy.Fills.ShouldHaveSingleItem().ShouldBe(new Fill(30, 5));
 
         var aliceAccount = await SendAsync<AccountView>(client, HttpMethod.Get, $"/api/rooms/{room.Code}/me", traderKey: alice.TraderKey);
-        aliceAccount.ShouldBe(new AccountView(10_150, -5));
+        (aliceAccount.Cash, aliceAccount.Position).ShouldBe((10_150L, -5L));
+        aliceAccount.DisplayName.ShouldBe(alice.DisplayName);
+        aliceAccount.OpenOrders.ShouldBeEmpty("her sell order was completely filled");
 
         var settlement = await SendAsync<Settlement>(client, HttpMethod.Post, $"/api/rooms/{room.Code}/settlement", hostKey: room.HostKey);
         var tv = settlement.TrueValue;
@@ -133,6 +135,68 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
         var pushed = await update.Task.WaitAsync(TimeSpan.FromSeconds(10));
         pushed.Bids.ShouldHaveSingleItem().ShouldBe(new DepthLevel(25, 3, 1));
         pushed.LastSequence.ShouldBeGreaterThan(initial.LastSequence);
+    }
+
+    [Fact]
+    public async Task A_player_can_see_and_cancel_their_resting_orders()
+    {
+        using var client = factory.CreateClient();
+        var room = await CreateRoomAsync(client);
+        var alice = await JoinAsync(client, room.Code);
+        var placed = await PlaceOrderAsync(client, room.Code, alice.TraderKey, new PlaceOrderRequest(Side.Buy, OrderType.Limit, 4, 31));
+
+        var before = await SendAsync<AccountView>(client, HttpMethod.Get, $"/api/rooms/{room.Code}/me", traderKey: alice.TraderKey);
+        before.OpenOrders.ShouldHaveSingleItem().ShouldBe(new OpenOrderView(placed.OrderId, Side.Buy, 31, 4));
+
+        using var cancel = await SendRawAsync(client, HttpMethod.Delete, $"/api/rooms/{room.Code}/orders/{placed.OrderId}", traderKey: alice.TraderKey);
+        cancel.StatusCode.ShouldBe(HttpStatusCode.NoContent);
+
+        var after = await SendAsync<AccountView>(client, HttpMethod.Get, $"/api/rooms/{room.Code}/me", traderKey: alice.TraderKey);
+        after.OpenOrders.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task Room_view_lets_a_late_joiner_catch_up()
+    {
+        using var client = factory.CreateClient();
+        var room = await CreateRoomAsync(client);
+        var alice = await JoinAsync(client, room.Code);
+        var bob = await JoinAsync(client, room.Code);
+        await PlaceOrderAsync(client, room.Code, alice.TraderKey, new PlaceOrderRequest(Side.Sell, OrderType.Limit, 2, 36));
+        await PlaceOrderAsync(client, room.Code, bob.TraderKey, new PlaceOrderRequest(Side.Buy, OrderType.Market, 2, null));
+        var news = await SendAsync<ClueView>(client, HttpMethod.Post, $"/api/rooms/{room.Code}/clues", hostKey: room.HostKey);
+
+        var view = await SendAsync<RoomView>(client, HttpMethod.Get, $"/api/rooms/{room.Code}");
+
+        view.Phase.ShouldBe(RoomPhase.Trading);
+        view.PlayerCount.ShouldBe(2);
+        view.Mode.DiceCount.ShouldBe(10);
+        view.PublicClues.ShouldHaveSingleItem().ShouldBe(news);
+        view.RecentTrades.ShouldHaveSingleItem().ShouldBe(new PublicTrade(view.RecentTrades[0].Sequence, 36, 2, Side.Buy));
+        view.Settlement.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Players_in_a_room_always_get_different_names()
+    {
+        using var client = factory.CreateClient();
+        var room = await CreateRoomAsync(client);
+
+        var players = await Task.WhenAll(Enumerable.Range(0, 40).Select(_ => JoinAsync(client, room.Code)));
+
+        players.Select(p => p.DisplayName).Distinct().Count().ShouldBe(40);
+    }
+
+    [Fact]
+    public async Task The_web_app_is_served_at_the_root()
+    {
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync(new Uri("/", UriKind.Relative));
+
+        response.StatusCode.ShouldBe(HttpStatusCode.OK);
+        response.Content.Headers.ContentType?.MediaType.ShouldBe("text/html");
+        response.Headers.GetValues("Content-Security-Policy").ShouldHaveSingleItem().ShouldContain("default-src 'self'");
     }
 
     private static Task<CreateRoomResponse> CreateRoomAsync(HttpClient client) =>

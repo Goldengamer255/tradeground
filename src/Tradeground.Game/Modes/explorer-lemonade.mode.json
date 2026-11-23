@@ -16,7 +16,7 @@
     "diceCount": 6,
     "diceSides": 10,
     "valuePerPip": 2,
-    "privateClueTemplate": "You peeked into crate #{index}: it has {value} lemons!",
-    "publicClueTemplate": "Breaking news: crate #{index} has {value} lemons!"
+    "privateClueTemplate": "You peeked into crate #{index}. Lemon count: {value}",
+    "publicClueTemplate": "Breaking news: crate #{index} has a lemon count of {value}!"
   }
 }

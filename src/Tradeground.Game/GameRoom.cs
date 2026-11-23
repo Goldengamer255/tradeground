@@ -12,7 +12,8 @@ public sealed record Player(string TraderId, string DisplayName, Clue PrivateClu
 
 public sealed record PlayerResult(int Rank, string DisplayName, long Cash, long Position, long ProfitAndLoss);
 
-public sealed record Settlement(long TrueValue, IReadOnlyList<PlayerResult> Results);
+/// <summary>The end of a round. The dice are no longer secret, so they are revealed here.</summary>
+public sealed record Settlement(long TrueValue, IReadOnlyList<int> Dice, IReadOnlyList<PlayerResult> Results);
 
 /// <summary>
 /// One round of a game: an order book, a ledger, the hidden value and per-player risk limits.
@@ -25,6 +26,7 @@ public sealed class GameRoom
     private readonly HiddenValueRound _round;
     private readonly Dictionary<string, Player> _players = [];
     private readonly Dictionary<long, OpenOrder> _openOrders = [];
+    private readonly List<Trade> _tape = [];
     private Settlement? _settlement;
 
     public GameRoom(GameMode mode, ulong seed)
@@ -42,12 +44,25 @@ public sealed class GameRoom
     public IReadOnlyList<Clue> PublicClues => _round.PublicClues;
     public Ledger Ledger => _ledger;
 
+    /// <summary>Every trade in this round, oldest first. Lets late joiners catch up on the tape.</summary>
+    public IReadOnlyList<Trade> Tape => _tape;
+
+    /// <summary>The final result, once the round has been settled.</summary>
+    public Settlement? Settlement => _settlement;
+
     public Player Join(string traderId, string displayName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(traderId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
         if (Phase != RoomPhase.Trading)
         {
             throw new InvalidOperationException("The round has already been settled.");
+        }
+
+        // Names are how players find themselves on the results table, so they must be unique.
+        if (IsNameTaken(displayName))
+        {
+            throw new InvalidOperationException($"The name {displayName} is already taken in this room.");
         }
 
         var player = new Player(traderId, displayName, _round.NextPrivateClue());
@@ -57,6 +72,25 @@ public sealed class GameRoom
     }
 
     public bool IsPlayer(string traderId) => _players.ContainsKey(traderId);
+
+    public bool IsNameTaken(string displayName) =>
+        _players.Values.Any(p => string.Equals(p.DisplayName, displayName, StringComparison.Ordinal));
+
+    public Player GetPlayer(string traderId) => _players[traderId];
+
+    /// <summary>
+    /// A player's resting orders, oldest first. Read from the book (the source of truth for price
+    /// and remaining size) and cross-checked against the room's own risk tracking: if the two ever
+    /// disagree, the risk checks would be wrong, so fail loudly instead of returning bad data.
+    /// </summary>
+    public IReadOnlyList<Order> OpenOrdersFor(string traderId) =>
+        _openOrders
+            .Where(kv => kv.Value.TraderId == traderId)
+            .Select(kv => _book.FindOrder(kv.Key) is { } order && order.Remaining == kv.Value.Remaining
+                ? order
+                : throw new InvalidOperationException($"Risk tracking is out of sync with the book for order {kv.Key}."))
+            .OrderBy(o => o.Sequence)
+            .ToList();
 
     public OrderResult Submit(OrderRequest request)
     {
@@ -79,6 +113,7 @@ public sealed class GameRoom
         }
 
         var result = _book.Submit(request);
+        _tape.AddRange(result.Trades);
 
         foreach (var trade in result.Trades)
         {
@@ -128,6 +163,15 @@ public sealed class GameRoom
         Phase = RoomPhase.Settled;
         var trueValue = _round.TrueValue;
 
+        // The contract has expired, so nothing can trade any more: cancel every resting order,
+        // exactly as an exchange does at expiry. Leaving them would show a "live" book that isn't.
+        foreach (var (orderId, open) in _openOrders)
+        {
+            _book.Cancel(orderId, open.TraderId);
+        }
+
+        _openOrders.Clear();
+
         var ranked = _players.Values
             .Select(p =>
             {
@@ -140,7 +184,7 @@ public sealed class GameRoom
             .Select((x, i) => new PlayerResult(i + 1, x.Player.DisplayName, x.Account.Cash, x.Account.Position, x.Pnl))
             .ToList();
 
-        _settlement = new Settlement(trueValue, ranked);
+        _settlement = new Settlement(trueValue, _round.Dice, ranked);
         return _settlement;
     }
 

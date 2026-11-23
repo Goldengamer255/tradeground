@@ -17,6 +17,10 @@ public sealed class GameRoomPropertyTests
             r.Ledger.TotalCash.ShouldBe(mode.StartingCash * Players.Length, "cash only moves between players");
             r.Ledger.TotalPosition.ShouldBe(0, "every long contract has a matching short");
             r.Ledger.Accounts.ShouldAllBe(a => Math.Abs(a.Position) <= mode.MaxPosition);
+
+            // OpenOrdersFor throws if the room's risk tracking ever drifts from the real book.
+            Players.Sum(p => r.OpenOrdersFor(p).Count).ShouldBe(r.Snapshot(depth: int.MaxValue).Bids.Sum(l => l.OrderCount)
+                + r.Snapshot(depth: int.MaxValue).Asks.Sum(l => l.OrderCount));
         });
 
         room.Settle().Results.Sum(r => r.ProfitAndLoss).ShouldBe(0, "trading is zero-sum");
