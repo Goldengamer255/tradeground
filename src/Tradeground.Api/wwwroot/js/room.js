@@ -9,6 +9,7 @@
 
 import * as api from "./api.js";
 import { estimate, knownDice, railHtml } from "./dice.js";
+import { howToButton, showHowToFirstTime } from "./howto.js";
 import { wordsFor } from "./words.js";
 import { applyStyles, esc, fmt, forgetSeat, notice, saveSeat, seatFor, setTopbar, signed, toast, trend } from "./ui.js";
 
@@ -273,7 +274,7 @@ class Room {
       <section class="host-head" aria-label="Room code">
         <div class="room-code">${esc(this.code)}</div>
         <div>
-          <h1>${esc(m.name)}</h1>
+          <div class="game-title"><h1>${esc(m.name)}</h1>${howToButton("market-maker")}</div>
           <p>Players open <strong>${esc(location.host)}</strong> and enter this code.</p>
           <p id="player-count" aria-live="polite"></p>
           <div class="host-controls" id="host-controls"></div>
@@ -283,7 +284,7 @@ class Room {
     const playerColumn = `
       <div class="stack">
         <section class="panel panel-you" aria-labelledby="you-h">
-          <div class="panel-head"><h2 id="you-h">${esc(w.clueTitle)}</h2></div>
+          <div class="panel-head"><h2 id="you-h">${esc(w.clueTitle)}</h2>${howToButton("market-maker")}</div>
           <p class="clue">${esc(this.me?.privateClue.text)}</p>
           <dl class="stats" id="stats"></dl>
         </section>
@@ -327,6 +328,7 @@ class Room {
 
     this.wireEvents();
     this.renderAll();
+    if (!isHost) showHowToFirstTime("market-maker");
   }
 
   renderAll() {
