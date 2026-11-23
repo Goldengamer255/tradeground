@@ -287,7 +287,7 @@ main:focus {
   color: #fff;
 }
 
-/* ---------- Home ---------- */
+/* ---------- Home: the playground ---------- */
 
 .home {
   display: grid;
@@ -297,8 +297,8 @@ main:focus {
 
 .home-intro {
   display: grid;
-  gap: 1.25rem;
-  max-width: 40rem;
+  gap: 1rem;
+  max-width: 42rem;
 }
 
 .home-intro h1 {
@@ -314,16 +314,180 @@ main:focus {
   max-width: 34em;
 }
 
-.home-actions {
+/* Games are rows divided by rules, not boxed cards: easiest at the top, hardest at the bottom. */
+.games {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-  gap: 2rem;
-  align-items: start;
+  border-top: 1px solid var(--rule);
 }
 
+.game {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr) auto;
+  gap: 0.5rem 1.75rem;
+  align-items: center;
+  padding: 1.5rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.game-art svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.game-text {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.game h2 {
+  font-size: var(--step-2);
+  font-weight: 720;
+}
+
+.game-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1.25rem;
+  color: var(--muted);
+  font-size: var(--step--1);
+}
+
+.game-teaches {
+  font-weight: 600;
+}
+
+.game-body {
+  color: var(--muted);
+  max-width: 40em;
+}
+
+.game-actions {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: stretch;
+  min-width: 12rem;
+}
+
+.host-buttons {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.game.soon .game-art,
+.game.soon .game-text {
+  opacity: 0.6;
+}
+
+.soon-tag {
+  display: inline-block;
+  vertical-align: middle;
+  margin-left: 0.5rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Difficulty as three bars: one look tells you how hard a game is. */
+.level-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.level-meter .bar {
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--rule);
+}
+
+.level-meter .bar.on {
+  background: var(--ink);
+}
+
+.level-name {
+  margin-left: 0.35rem;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Game drawings */
+.art-body.up,
+.art-buy {
+  fill: var(--bid);
+}
+
+.art-body.down,
+.art-sell {
+  fill: var(--ask);
+}
+
+.art-wick {
+  stroke-width: 2;
+}
+
+.art-wick.up {
+  stroke: var(--bid);
+}
+
+.art-wick.down {
+  stroke: var(--ask);
+}
+
+.art-now {
+  stroke: var(--ink);
+  stroke-dasharray: 3 3;
+}
+
+.art-q {
+  fill: var(--muted);
+  font: 700 24px var(--font-display);
+}
+
+.art-line {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+.art-die {
+  fill: var(--die-face);
+  stroke: var(--die-ink);
+  stroke-width: 2.5;
+}
+
+.art-die.hidden-die {
+  fill: var(--paper);
+  stroke: var(--rule);
+}
+
+.art-pip {
+  fill: var(--die-ink);
+}
+
+/* Join with a room code */
 .join-form {
   display: grid;
   gap: 0.75rem;
+  max-width: 34rem;
+}
+
+.join-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+}
+
+.join-row .button {
+  min-height: 4rem;
+  padding: 0 1.5rem;
 }
 
 .code-input {
@@ -345,47 +509,77 @@ main:focus {
   letter-spacing: 0.2em;
 }
 
-.mode-list {
-  display: grid;
-  gap: 0;
-  border-top: 1px solid var(--rule);
-}
-
-.mode-option {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 0.25rem 1.5rem;
-  align-items: center;
-  padding: 1rem 0;
-  border-bottom: 1px solid var(--rule);
-}
-
-.mode-option h3 {
-  font-size: var(--step-2);
-  font-weight: 700;
-}
-
-.mode-option .audience {
-  font-size: var(--step--1);
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.mode-option p {
-  grid-column: 1;
-  color: var(--muted);
-  max-width: 38em;
-}
-
-.mode-option .button {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-}
-
 .home-footnote {
   color: var(--muted);
   font-size: var(--step--1);
   max-width: 40em;
+}
+
+/* ---------- How to play ---------- */
+
+.game-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.howto-open {
+  min-height: 2.25rem;
+  padding: 0.25rem 0.85rem;
+  font-size: var(--step--1);
+}
+
+
+dialog.howto {
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 2rem);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-panel);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: 0 20px 60px rgb(0 0 0 / 0.35);
+}
+
+dialog.howto::backdrop {
+  background: rgb(18 24 38 / 0.55);
+}
+
+.howto-body {
+  display: grid;
+  gap: 1rem;
+  padding: 1.5rem;
+}
+
+.howto-body h2 {
+  font-size: var(--step-2);
+}
+
+.howto-intro {
+  font-size: var(--step-1);
+  line-height: 1.4;
+}
+
+.howto-steps {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding-left: 1.4rem;
+}
+
+.howto-steps li::marker {
+  font-family: var(--font-display);
+  font-weight: 750;
+}
+
+.howto-note {
+  color: var(--muted);
+  font-size: var(--step--1);
+}
+
+.howto-body form .button {
+  width: 100%;
 }
 
 /* ---------- Dice rail: the hidden value ---------- */
@@ -482,10 +676,6 @@ main:focus {
 
 .die.flip .die-face {
   animation: flip 520ms cubic-bezier(0.2, 0.7, 0.2, 1) var(--delay, 0ms) both;
-}
-
-.hero-dice {
-  margin-bottom: 0.5rem;
 }
 
 @keyframes flip {
@@ -927,23 +1117,6 @@ div.level {
 
 /* ---------- Chart Replay ---------- */
 
-.solo {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem 2rem;
-  padding: 1.25rem 0;
-  border-top: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
-}
-
-.solo p {
-  color: var(--muted);
-  max-width: 40em;
-  margin-top: 0.35rem;
-}
-
 .chart-game {
   display: grid;
   gap: var(--gap);
@@ -1176,7 +1349,6 @@ div.level {
 
 @media (max-width: 720px) {
   /* Same specificity as the tablet rules above, so these win by coming later. */
-  .home-actions,
   .floor,
   .floor.host-floor,
   .host-head {
@@ -1206,14 +1378,18 @@ div.level {
     --size: 2.35rem;
   }
 
-  .mode-option {
-    grid-template-columns: minmax(0, 1fr);
+  .game {
+    grid-template-columns: 5rem minmax(0, 1fr);
+    align-items: start;
   }
 
-  .mode-option .button {
-    grid-column: 1;
-    grid-row: auto;
-    justify-self: start;
+  .game-art {
+    padding-top: 0.4rem;
+  }
+
+  .game-actions {
+    grid-column: 1 / -1;
+    min-width: 0;
   }
 
   .topbar-room .hide-narrow {

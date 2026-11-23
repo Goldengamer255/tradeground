@@ -1,27 +1,19 @@
 # Tradeground
 
-A free, browser-based trading game that teaches how markets really work: from kids learning
-supply and demand to students preparing for trading-firm interviews.
-Real order book, real price discovery, zero real money.
+**A playground for learning to trade.** Real charts, pretend money, and three games that go from
+your first price chart to how professional trading firms think. Free, in the browser, no sign-up.
 
-## How a round works
+| Game | Level | Teaches | Players |
+|---|---|---|---|
+| **Up or Down** | Easy | Reading price charts | Solo |
+| **Trade Through History** *(coming soon)* | Medium | Buying, selling and stop-losses, like a real trading app | Solo |
+| **Market Maker** | Advanced | How trading firms make money | 2+ (host + players) |
 
-Every round has a **hidden value**. In *Ten Dice*, the contract settles at the sum of ten hidden
-six-sided dice (expected value with no information: 35). Each player privately sees one die.
-Players trade with each other on a live limit order book; the host reveals dice as public
-"news" during the round. At the end, every position is closed at the true value and players
-are ranked by profit and loss.
+Every game has a short **How to play** guide, shown automatically the first time someone plays.
 
-Two audiences share one engine:
+## The games
 
-| Mode | Audience | Example |
-|---|---|---|
-| Explorer | Younger players | *Lemonade Stand*: jugs are worth 2 coins per lemon in six hidden crates |
-| Trader | Teens and adults new to trading | *Ten Dice*: full order book, limit and market orders |
-
-Modes are JSON files in [`src/Tradeground.Game/Modes`](src/Tradeground.Game/Modes).
-
-### Chart Replay (solo practice)
+### Up or Down
 
 A real chart, cut off at "now". Pick a timeframe, call **Up** or **Down** once, then watch the next 20 candles
 replay and find out whether you were right, and which market and dates it was. A run keeps your right/wrong
@@ -41,6 +33,26 @@ tally and your streak.
 - **Checked data.** Every candle is validated at startup (high and low contain open and close, times in order),
   and a test checks candles are spaced exactly one timeframe apart. Prices are integers end to end; the import
   refuses any price it would have to round.
+
+### Market Maker
+
+Picture an airport currency booth: it buys dollars a little cheaper than it sells them, and earns
+the gap. In Market Maker, the players are the booths.
+
+Every round has a **hidden value**. In *Ten Dice*, the contract settles at the sum of ten hidden
+six-sided dice (expected value with no information: 35). Each player privately sees one die.
+Players trade with each other on a live limit order book; the host reveals dice as public
+"news" during the round. At the end, every position is closed at the true value and players
+are ranked by profit and loss.
+
+Two versions share one engine:
+
+| Mode | Audience | Example |
+|---|---|---|
+| Explorer | Younger players | *Lemonade Stand*: jugs are worth 2 coins per lemon in six hidden crates |
+| Trader | Teens and adults | *Ten Dice*: full order book, limit and market orders |
+
+Modes are JSON files in [`src/Tradeground.Game/Modes`](src/Tradeground.Game/Modes).
 
 ## Architecture
 

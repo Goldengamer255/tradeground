@@ -3,6 +3,7 @@
 // receives it after the call.
 
 import * as api from "./api.js";
+import { howToButton, showHowToFirstTime } from "./howto.js";
 import { esc, notice, setTopbar } from "./ui.js";
 
 const KEY = "tradeground.chart";
@@ -99,6 +100,7 @@ class ChartGame {
     this.shown = this.chart.candles.length;
     this.build();
     document.addEventListener("keydown", this.onKey);
+    showHowToFirstTime("up-or-down");
   }
 
   close() {
@@ -119,7 +121,7 @@ class ChartGame {
       <div class="chart-game">
         <div class="chart-head">
           <div>
-            <h1>Up or down?</h1>
+            <div class="game-title"><h1>Up or down?</h1>${howToButton("up-or-down")}</div>
             <p>A real chart, cut off at "now". Call where the price will be when the next
               <span id="horizon"></span> have passed. The market and the dates stay hidden until you call.</p>
           </div>
@@ -307,6 +309,7 @@ class ChartGame {
 
   handleKey(event) {
     if (event.target.closest?.("input, textarea, select") || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (document.querySelector("dialog[open]")) return; // Keys belong to the open guide, not the chart behind it.
     if (!this.chart.result && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
       event.preventDefault();
       this.call(event.key === "ArrowUp" ? "Up" : "Down");
