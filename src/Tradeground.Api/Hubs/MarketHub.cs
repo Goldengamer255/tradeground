@@ -5,9 +5,8 @@ using Tradeground.Engine;
 namespace Tradeground.Api.Hubs;
 
 /// <summary>
-/// Real-time channel. Clients subscribe to a room and the server pushes:
-/// "bookUpdated" (BookSnapshot), "tradesExecuted" (PublicTrade[]), "clueRevealed" (string)
-/// and "roundSettled" (Settlement).
+/// Real-time channel. Clients subscribe to a room and the server pushes the events named in
+/// <see cref="Contracts.MarketEvents"/>: book updates, trades, news, new players and the settlement.
 /// </summary>
 public sealed class MarketHub(RoomRegistry rooms) : Hub
 {

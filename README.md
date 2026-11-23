@@ -57,8 +57,13 @@ Modes are JSON files in [`src/Tradeground.Game/Modes`](src/Tradeground.Game/Mode
 
 ```mermaid
 flowchart LR
-    Browser -- REST --> API
-    Browser <-- SignalR push --> Hub
+    subgraph Browser[Browser: Tradeground.Web, Blazor WebAssembly, C#]
+        Pages[Pages and components]
+    end
+    Pages -- REST --> API
+    Pages <-- SignalR push --> Hub
+    Contracts[[Tradeground.Contracts<br/>shared request and response shapes]] -.- Pages
+    Contracts -.- API
     subgraph Tradeground.Api
         API[Minimal API endpoints] --> Actor[RoomActor<br/>one mailbox + worker per room]
         Hub[MarketHub] --> Actor
@@ -78,7 +83,9 @@ flowchart LR
 |---|---|
 | `Tradeground.Engine` | Limit order book and matching engine. Pure C#, no I/O, deterministic. |
 | `Tradeground.Game` | Game rules: hidden values, clues, ledger, position limits, settlement. |
-| `Tradeground.Api` | ASP.NET Core minimal API, SignalR hub, per-room actors, guest sessions. Also serves the web app from `wwwroot`. |
+| `Tradeground.Contracts` | The request and response shapes the API and the browser app share, plus a source-generated JSON context. |
+| `Tradeground.Web` | The browser app: Blazor WebAssembly, written in C#. Never references `Tradeground.Game`, so the chart answers and hidden dice can't be in the download. |
+| `Tradeground.Api` | ASP.NET Core minimal API, SignalR hub, per-room actors, guest sessions. Also hosts the browser app, so one origin and one container ship everything. |
 
 ### Key design decisions
 
@@ -94,20 +101,27 @@ flowchart LR
 
 ### Web app
 
-Plain HTML, CSS and JavaScript modules in [`src/Tradeground.Api/wwwroot`](src/Tradeground.Api/wwwroot): no framework
-and no build step, served by the API itself so one container ships everything.
+The browser app is **C# all the way down**: [Blazor WebAssembly](src/Tradeground.Web) components run in the
+browser on WebAssembly, call the API with typed HTTP requests and listen for live updates with the C#
+SignalR client. About 40 lines of JavaScript remain, only for browser features C# can't reach on its own
+(storage, the native dialog, keyboard shortcuts).
 
+- **One set of types on both sides.** Requests and responses live in `Tradeground.Contracts`, used by the API
+  and the browser alike, so the two can't disagree. A source-generated JSON context keeps serialisation
+  working after the browser build trims unused code (about 2.4 MB compressed download, cached after the first visit).
+- **The answers never ship to the browser.** `Tradeground.Web` doesn't reference `Tradeground.Game`, which holds
+  the chart data and hidden dice; a test enforces it, and the API only sends the future after a call.
 - **Fair value, live.** The dice rail shows what each player knows (their private die plus public news) and the
-  expected value and range that follow from it. That calculation is the lesson of the game.
+  expected value and range that follow from it. That calculation is the lesson of Market Maker.
 - **Two vocabularies.** Explorer mode says *buyers, sellers, coins, crates* and hides market orders;
   Trader mode says *bids, asks, position* and shows the full ticket.
 - **Live without losing input.** REST for actions, SignalR for pushes. The client subscribes *before* fetching
-  state so no event falls in the gap, drops duplicates by sequence number, and re-renders only the region that
-  changed, so typing in the order ticket is never interrupted.
-- **Nothing from third parties.** Fonts and the SignalR client are vendored under `wwwroot/lib`, so a strict
-  `Content-Security-Policy: default-src 'self'` holds and no outside service sees players' IP addresses.
-- **Accessible.** Keyboard-operable book and ticket, visible focus, screen-reader labels on dice and price levels,
-  blue/orange instead of green/red for colour-blind players, reduced-motion respected, works down to phone width.
+  state so no event falls in the gap, and drops duplicates by sequence number.
+- **A strict security policy.** `default-src 'self'` with one addition, `'wasm-unsafe-eval'`, which WebAssembly
+  needs. No inline scripts or styles (variable positions use fixed CSS classes or SVG attributes instead), and
+  fonts are self-hosted, so no outside service sees players' IP addresses.
+- **Accessible and responsive.** Keyboard-operable, visible focus, screen-reader labels on dice, candles and price
+  levels, blue/orange instead of green/red for colour-blind players, reduced motion respected, works at phone width.
 
 ## Running locally
 
@@ -121,7 +135,7 @@ dotnet test
 dotnet run --project src/Tradeground.Api
 ```
 
-Then open the URL it prints: host a game in one tab and join it from another tab or a phone on the same network.
+Then open http://localhost:5080: host a Market Maker game in one tab and join it from another, or play Up or Down.
 
 ```bash
 docker compose up --build
@@ -162,6 +176,8 @@ Real-time updates: connect to `/hubs/market`, call `Subscribe(code)`, then liste
 | Model-based test (optimised book vs. a simple model) | FsCheck | Every push |
 | Integration tests (real app over HTTP and SignalR) | WebApplicationFactory | Every push |
 | Chart data checks (every timeframe complete, evenly spaced, lined up on "now") | Validated at startup and in tests | Every push |
+| Web app logic (formatting, fair value) and browser safety (no game logic in the download) | xUnit, Shouldly | Every push |
+| Hosting and security (deep links, 404s, CSP, ticker never overlaps a chart's future) | WebApplicationFactory | Every push |
 | Benchmarks (orders/sec, allocations) | BenchmarkDotNet | Nightly |
 
 Invariants checked on random sessions: the book is never crossed; every order is fully
@@ -176,6 +192,7 @@ dotnet run -c Release --project benchmarks/Tradeground.Benchmarks
 
 - [x] Matching engine, game rules, REST + SignalR API, tests, CI, Docker
 - [x] Web frontend (Explorer and Trader views)
+- [x] Front end rebuilt in C# with Blazor WebAssembly, with a livelier design
 - [ ] Market-maker bots
 - [ ] Round timer, automatic clue schedule, room clean-up
 - [ ] Postgres persistence and event-sourced replays; Redis SignalR backplane
@@ -195,8 +212,7 @@ Chart data:
   Governors of the Federal Reserve System (US), H.10 Foreign Exchange Rates, retrieved from
   [FRED](https://fred.stlouisfed.org/), Federal Reserve Bank of St. Louis. Public domain.
 
-Vendored in `src/Tradeground.Api/wwwroot/lib`, each under its own license:
-[SignalR JavaScript client](https://github.com/dotnet/aspnetcore) (MIT),
+Fonts, self-hosted in `src/Tradeground.Web/wwwroot/fonts`:
 [Bricolage Grotesque](https://github.com/ateliertriay/bricolage) and [IBM Plex Sans](https://github.com/IBM/plex)
 (SIL Open Font License 1.1; license texts alongside the font files).
 

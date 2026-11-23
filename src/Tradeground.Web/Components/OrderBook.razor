@@ -1,0 +1,92 @@
+@*
+    The order book ladder: sellers (asks) on top, best price nearest the middle; buyers (bids) below.
+    Each level's bar shows its size compared with the biggest level. Players can click a level to
+    trade at its price: an ask becomes a buy, a bid becomes a sell.
+*@
+<div class="ladder">
+    <div class="ladder-head" aria-hidden="true"><span>@Words.Bids</span><span>Price</span><span>@Words.Asks</span></div>
+
+    @foreach (var level in Asks.Reverse())
+    {
+        @Level(level, isAsk: true)
+    }
+
+    <div class="spread">@Middle</div>
+
+    @foreach (var level in Bids)
+    {
+        @Level(level, isAsk: false)
+    }
+</div>
+
+@code {
+    private const int Depth = 8;
+
+    [Parameter, EditorRequired] public BookSnapshot Book { get; set; } = default!;
+    [Parameter, EditorRequired] public Vocabulary Words { get; set; } = default!;
+
+    /// <summary>True for a player during the round; false for the host or after settlement.</summary>
+    [Parameter] public bool Clickable { get; set; }
+
+    /// <summary>The side the player would take, and the price.</summary>
+    [Parameter] public EventCallback<(Side Side, long Price)> OnPick { get; set; }
+
+    private IEnumerable<DepthLevel> Asks => Book.Asks.Take(Depth);
+    private IEnumerable<DepthLevel> Bids => Book.Bids.Take(Depth);
+    private long Biggest => Math.Max(1, Asks.Concat(Bids).Select(l => l.Quantity).DefaultIfEmpty(1).Max());
+
+    private string Middle
+    {
+        get
+        {
+            long? ask = Book.Asks.Count > 0 ? Book.Asks[0].Price : null;
+            long? bid = Book.Bids.Count > 0 ? Book.Bids[0].Price : null;
+            return (ask, bid) switch
+            {
+                (null, null) => "Nothing on the book yet. Place the first order.",
+                (null, _) => $"No {Words.Asks.ToLowerInvariant()} yet",
+                (_, null) => $"No {Words.Bids.ToLowerInvariant()} yet",
+                ({ } a, { } b) => $"Spread {Format.Number(a - b)}, mid {Format.Number((a + b) / 2m)}",
+            };
+        }
+    }
+
+    private RenderFragment Level(DepthLevel level, bool isAsk) => __builder =>
+    {
+        var width = Math.Round(level.Quantity * 100m / Biggest);
+        var side = isAsk ? "ask" : "bid";
+        var action = isAsk ? Side.Buy : Side.Sell;
+        var label = $"{(isAsk ? Words.Asks : Words.Bids)}: {level.Quantity} at {level.Price}."
+            + (Clickable ? $" Select to {(isAsk ? "buy" : "sell")} at {level.Price}." : "");
+
+        if (Clickable)
+        {
+            <button type="button" class="level @side" aria-label="@label" @onclick="() => OnPick.InvokeAsync((action, level.Price))">
+                @Row(level, isAsk, width)
+            </button>
+        }
+        else
+        {
+            <div class="level @side" aria-label="@label">@Row(level, isAsk, width)</div>
+        }
+    };
+
+    private static RenderFragment Row(DepthLevel level, bool isAsk, decimal width) => __builder =>
+    {
+        @* The depth bar is SVG: its width is an attribute, which the security policy allows (inline styles it doesn't). *@
+        <svg class="bar" viewBox="0 0 100 1" preserveAspectRatio="none" aria-hidden="true">
+            <rect x="@(isAsk ? 100 - width : 0)" y="0" width="@width" height="1" />
+        </svg>
+        @if (isAsk)
+        {
+            <span></span>
+            <span class="price">@Format.Number(level.Price)</span>
+            <span class="qty-ask">@Format.Number(level.Quantity)</span>
+        }
+        else
+        {
+            <span>@Format.Number(level.Quantity)</span>
+            <span class="price">@Format.Number(level.Price)</span>
+        }
+    };
+}

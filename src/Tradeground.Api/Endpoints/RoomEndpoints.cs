@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.SignalR;
 using Tradeground.Api.Hubs;
 using Tradeground.Api.Rooms;
+using Tradeground.Contracts;
 using Tradeground.Engine;
 using Tradeground.Game;
+using GamePhase = Tradeground.Game.RoomPhase;
 
 namespace Tradeground.Api.Endpoints;
 
@@ -12,8 +14,8 @@ namespace Tradeground.Api.Endpoints;
 /// </summary>
 public static class RoomEndpoints
 {
-    public const string TraderKeyHeader = "X-Trader-Key";
-    public const string HostKeyHeader = "X-Host-Key";
+    private const string TraderKeyHeader = ApiHeaders.TraderKey;
+    private const string HostKeyHeader = ApiHeaders.HostKey;
 
     /// <summary>A classroom is ~30; the cap stops one room from growing without limit.</summary>
     public const int MaxPlayersPerRoom = 100;
@@ -25,7 +27,7 @@ public static class RoomEndpoints
     {
         var api = app.MapGroup("/api");
 
-        api.MapGet("/modes", (ModeCatalog modes) => modes.All.Select(ModeSummary.From));
+        api.MapGet("/modes", (ModeCatalog modes) => modes.All.Select(m => m.ToSummary()));
 
         var rooms = api.MapGroup("/rooms");
         rooms.MapPost("/", CreateRoom);
@@ -65,12 +67,12 @@ public static class RoomEndpoints
 
         return Results.Ok(await room.Ask(r => new RoomView(
             room.Code,
-            ModeSummary.From(r.Mode),
-            r.Phase,
+            r.Mode.ToSummary(),
+            r.Phase.ToContract(),
             r.Players.Count,
-            r.PublicClues.Select(ClueView.From).ToList(),
-            r.Tape.TakeLast(RecentTradeCount).Select(PublicTrade.From).ToList(),
-            r.Settlement)));
+            r.PublicClues.Select(c => c.ToView()).ToList(),
+            r.Tape.TakeLast(RecentTradeCount).Select(t => t.ToPublic()).ToList(),
+            r.Settlement?.ToView())));
     }
 
     private static async Task<IResult> JoinRoom(string code, RoomRegistry registry, IHubContext<MarketHub> hub)
@@ -86,7 +88,7 @@ public static class RoomEndpoints
         // happen as one step. Two players joining at the same moment can't both get the same name.
         var joined = await room.Ask(r =>
         {
-            if (r.Phase != RoomPhase.Trading)
+            if (r.Phase != GamePhase.Trading)
             {
                 return new JoinOutcome(null, "The round is over.", 0);
             }
@@ -112,12 +114,12 @@ public static class RoomEndpoints
             return Results.Conflict(joined.Error);
         }
 
-        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync("playerJoined", joined.Count);
+        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync(MarketEvents.PlayerJoined, joined.Count);
 
         return Results.Ok(new JoinRoomResponse(
             traderKey,
             player.DisplayName,
-            ClueView.From(player.PrivateClue),
+            player.PrivateClue.ToView(),
             room.Mode.StartingCash,
             room.Mode.MaxPosition));
     }
@@ -152,10 +154,10 @@ public static class RoomEndpoints
             var account = r.Ledger.Get(traderKey);
             return new AccountView(
                 player.DisplayName,
-                ClueView.From(player.PrivateClue),
+                player.PrivateClue.ToView(),
                 account.Cash,
                 account.Position,
-                r.OpenOrdersFor(traderKey).Select(OpenOrderView.From).ToList());
+                r.OpenOrdersFor(traderKey).Select(o => o.ToView()).ToList());
         });
 
         return view is null ? Results.Unauthorized() : Results.Ok(view);
@@ -190,23 +192,17 @@ public static class RoomEndpoints
         if (o.Result.Status != OrderStatus.Rejected)
         {
             var group = hub.Clients.Group(MarketHub.GroupFor(room.Code));
-            await group.SendAsync("bookUpdated", o.Snapshot);
+            await group.SendAsync(MarketEvents.BookUpdated, o.Snapshot);
             if (o.Result.Trades.Count > 0)
             {
-                var tape = o.Result.Trades.Select(PublicTrade.From).ToList();
-                await group.SendAsync("tradesExecuted", tape);
+                var tape = o.Result.Trades.Select(t => t.ToPublic()).ToList();
+                await group.SendAsync(MarketEvents.TradesExecuted, tape);
             }
         }
 
         // A rejected order is a normal business outcome (like an exchange reject message), so it is
         // 200 OK with Status = Rejected. 400 is reserved for requests that are malformed.
-        return Results.Ok(new PlaceOrderResponse(
-            o.Result.OrderId,
-            o.Result.Status,
-            o.Result.FilledQuantity,
-            o.Result.RestingQuantity,
-            o.Result.Trades.Select(t => new Fill(t.Price, t.Quantity)).ToList(),
-            o.Result.RejectReason));
+        return Results.Ok(o.Result.ToResponse());
     }
 
     private static async Task<IResult> CancelOrder(
@@ -236,7 +232,7 @@ public static class RoomEndpoints
             return Results.NotFound();
         }
 
-        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync("bookUpdated", o.Snapshot);
+        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync(MarketEvents.BookUpdated, o.Snapshot);
         return Results.NoContent();
     }
 
@@ -258,8 +254,8 @@ public static class RoomEndpoints
             return Results.Conflict("No more clues to reveal.");
         }
 
-        var view = ClueView.From(clue);
-        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync("clueRevealed", view);
+        var view = clue.ToView();
+        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync(MarketEvents.ClueRevealed, view);
         return Results.Ok(view);
     }
 
@@ -275,10 +271,10 @@ public static class RoomEndpoints
             return Results.Unauthorized();
         }
 
-        var (settlement, snapshot) = await room.Ask(r => (r.Settle(), r.Snapshot()));
+        var (settlement, snapshot) = await room.Ask(r => (r.Settle().ToView(), r.Snapshot()));
         var group = hub.Clients.Group(MarketHub.GroupFor(room.Code));
-        await group.SendAsync("roundSettled", settlement);
-        await group.SendAsync("bookUpdated", snapshot);
+        await group.SendAsync(MarketEvents.RoundSettled, settlement);
+        await group.SendAsync(MarketEvents.BookUpdated, snapshot);
         return Results.Ok(settlement);
     }
 

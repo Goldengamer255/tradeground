@@ -1,0 +1,105 @@
+@*
+    The hidden value, drawn as dice, plus the fair-value estimate a player can make from what they
+    know. Once the round is settled every die is shown and the estimate becomes the final value.
+*@
+<section class="rail" aria-label="The hidden @Words.Dice">
+    <ul class="dice">
+        @for (var number = 1; number <= Mode.DiceCount; number++)
+        {
+            var value = Known.TryGetValue(number, out var v) ? v : (int?)null;
+            var mine = number == MineDie;
+            var flipOrder = FlipOrder(number);
+            var classes = $"die {(value is null ? "hidden" : "known")}{(mine ? " mine" : "")}{(flipOrder >= 0 ? $" flip order-{Math.Min(flipOrder, 9)}" : "")}";
+            var label = value is null ? $"{Words.Die} {number}: hidden" : $"{Words.Die} {number}: {value}{(mine ? " (only you can see this)" : "")}";
+            <li class="@classes" aria-label="@label">
+                <span class="die-face">
+                    @if (value is null)
+                    {
+                        <text>?</text>
+                    }
+                    else if (Mode.DiceSides == 6)
+                    {
+                        <span class="pips-grid">
+                            @for (var cell = 1; cell <= 9; cell++)
+                            {
+                                @if (Pips[value.Value].Contains(cell))
+                                {
+                                    <i></i>
+                                }
+                                else
+                                {
+                                    <span></span>
+                                }
+                            }
+                        </span>
+                    }
+                    else
+                    {
+                        @value
+                    }
+                </span>
+            </li>
+        }
+    </ul>
+
+    <div class="estimate">
+        @if (SettledAt is { } final)
+        {
+            <span class="estimate-label">Final value</span>
+            <span class="estimate-value">@Format.Number(final)</span>
+            <span class="estimate-range">
+                The @Words.Dice added up to @Format.Number(Known.Values.Sum())@(Mode.ValuePerPip == 1 ? "" : $", worth {Mode.ValuePerPip} each")
+            </span>
+        }
+        else
+        {
+            var estimate = FairValue.Of(Mode, Known);
+            <span class="estimate-label">@Words.Estimate, from @estimate.KnownCount of @Mode.DiceCount @Words.Dice</span>
+            <span class="estimate-value">@Format.Number(estimate.Value)</span>
+            <span class="estimate-range">
+                @(estimate.Low == estimate.High ? $"Every {Words.Die} is known" : $"Anywhere from {Format.Number(estimate.Low)} to {Format.Number(estimate.High)}")
+            </span>
+        }
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public ModeSummary Mode { get; set; } = default!;
+    [Parameter, EditorRequired] public Vocabulary Words { get; set; } = default!;
+
+    /// <summary>Die number (1-based) to value, for every die this viewer can see.</summary>
+    [Parameter, EditorRequired] public IReadOnlyDictionary<int, int> Known { get; set; } = new Dictionary<int, int>();
+
+    /// <summary>The player's own private die, highlighted.</summary>
+    [Parameter] public int? MineDie { get; set; }
+
+    /// <summary>Dice to animate turning over, in order.</summary>
+    [Parameter] public IReadOnlyList<int> Flip { get; set; } = [];
+
+    /// <summary>The final value once settled; replaces the estimate.</summary>
+    [Parameter] public long? SettledAt { get; set; }
+
+    private int FlipOrder(int number)
+    {
+        for (var i = 0; i < Flip.Count; i++)
+        {
+            if (Flip[i] == number)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    // Pip positions on a 3x3 grid, numbered 1-9 left to right, top to bottom.
+    private static readonly Dictionary<int, int[]> Pips = new()
+    {
+        [1] = [5],
+        [2] = [3, 7],
+        [3] = [3, 5, 7],
+        [4] = [1, 3, 7, 9],
+        [5] = [1, 3, 5, 7, 9],
+        [6] = [1, 3, 4, 6, 7, 9],
+    };
+}

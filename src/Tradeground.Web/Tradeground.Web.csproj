@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+  <!--
+    The browser app, written in C# with Blazor and run in the browser on WebAssembly.
+    The API project hosts these files, so the site and the API share one origin and one container.
+  -->
+  <PropertyGroup>
+    <!-- Smaller download: the app formats its own numbers and dates and needs no culture data. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" />
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Tradeground.Contracts\Tradeground.Contracts.csproj" />
+  </ItemGroup>
+</Project>

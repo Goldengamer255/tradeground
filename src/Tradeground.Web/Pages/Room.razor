@@ -1,0 +1,744 @@
+@page "/play/{Code}"
+@page "/host/{Code}"
+@implements IAsyncDisposable
+@using Microsoft.AspNetCore.SignalR
+@using Microsoft.AspNetCore.SignalR.Client
+@using Microsoft.Extensions.DependencyInjection
+@using System.Text.Json.Serialization
+@inject TradegroundApi Api
+@inject Seats Seats
+@inject HowTo HowTo
+@inject Toasts Toasts
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+@*
+    A Market Maker room, for the host (/host/CODE) or a player (/play/CODE).
+    Data flow: REST for actions and catch-up, SignalR for live pushes. On open we SUBSCRIBE first and
+    fetch the room second, so no event can fall into the gap; anything that arrives twice is dropped
+    by sequence number (trades) or die number (news).
+*@
+
+<PageTitle>@(mode?.Name ?? "Market Maker") · Tradeground</PageTitle>
+
+@switch (screen)
+{
+    case Screen.Loading:
+        <main class="page"><p class="waiting">Opening the room…</p></main>
+        break;
+
+    case Screen.Message:
+        <Notice Title="@messageTitle" Body="@messageBody">
+            @if (offerJoin)
+            {
+                <button class="btn btn-primary" type="button" disabled="@busy" @onclick="JoinNow">Join the game</button>
+                <a class="btn btn-light" href="">Cancel</a>
+            }
+            else if (offerPlayerLink)
+            {
+                <a class="btn btn-primary" href="play/@Code">Join as a player</a>
+            }
+            else
+            {
+                <a class="btn btn-primary" href="">Back to the games</a>
+            }
+        </Notice>
+        break;
+
+    case Screen.Room:
+        <main class="page">
+            @if (IsHost)
+            {
+                <section class="host-head" aria-label="Room code">
+                    <div class="room-code">@Code</div>
+                    <div>
+                        <div class="title-row">
+                            <h1>@mode!.Name</h1>
+                            <button class="btn btn-light btn-sm" type="button" @onclick="() => HowTo.Show(HowTo.MarketMaker)">How to play</button>
+                        </div>
+                        <p class="muted">Players open <strong>@HostName</strong> and enter this code.</p>
+                        <p class="muted" aria-live="polite">@PlayerCountText</p>
+                        <div class="host-controls">
+                            @if (phase == RoomPhase.Trading)
+                            {
+                                <button class="btn btn-primary" type="button" disabled="@(busy || DiceLeft == 0)" @onclick="Reveal">
+                                    @(DiceLeft == 0 ? $"Every {words.Die} revealed" : $"Reveal a {words.Die} ({DiceLeft} left)")
+                                </button>
+                                <button class="btn btn-light" type="button" disabled="@busy" @onclick="EndRound">
+                                    @(settleArmed ? "Click again to end the round" : "End the round")
+                                </button>
+                            }
+                            else
+                            {
+                                <a class="btn btn-primary" href="">Host another game</a>
+                            }
+                        </div>
+                    </div>
+                </section>
+            }
+
+            @if (settlement is not null)
+            {
+                <SettlementPanel @ref="results" Settlement="settlement" Mode="mode!" Words="words" MyName="@me?.DisplayName" />
+            }
+
+            <DiceRail Mode="mode!" Words="words" Known="Known" MineDie="me?.PrivateClue.Die" Flip="flip" SettledAt="settlement?.TrueValue" />
+
+            <div class="floor @(IsHost ? "host" : "")">
+                @if (!IsHost && me is not null)
+                {
+                    <div class="stack">
+                        <section class="panel panel-you" aria-labelledby="you-title">
+                            <div class="panel-head">
+                                <h2 id="you-title">@words.ClueTitle</h2>
+                                <button class="btn btn-light btn-sm" type="button" @onclick="() => HowTo.Show(HowTo.MarketMaker)">How to play</button>
+                            </div>
+                            <p class="muted">You're playing as <strong>@me.DisplayName</strong>.</p>
+                            <p class="clue">@me.PrivateClue.Text</p>
+                            <dl class="stats">
+                                <div><dt>@words.Cash</dt><dd>@Format.Number(me.Cash)</dd></div>
+                                <div><dt>@words.Position</dt><dd>@Format.Signed(me.Position) <span class="empty">@mode!.Unit</span></dd></div>
+                                <div>
+                                    <dt>@(settlement is null ? words.AtFair : "Final profit")</dt>
+                                    <dd class="@(Pnl > 0 ? "up" : Pnl < 0 ? "down" : "")">@Format.Signed(Math.Round(Pnl))</dd>
+                                </div>
+                            </dl>
+                        </section>
+
+                        <section class="panel panel-ticket" aria-labelledby="ticket-title">
+                            <div class="panel-head">
+                                <h2 id="ticket-title">@words.TicketTitle</h2>
+                                <small>Up to @mode!.MaxOrderQuantity at a time, @mode.MaxPosition in total</small>
+                            </div>
+                            <form class="ticket" @onsubmit="Submit" novalidate>
+                                <div class="segmented" role="group" aria-label="Buy or sell">
+                                    <button type="button" class="buy" aria-pressed="@Pressed(side == Side.Buy)" @onclick="() => side = Side.Buy">Buy</button>
+                                    <button type="button" class="sell" aria-pressed="@Pressed(side == Side.Sell)" @onclick="() => side = Side.Sell">Sell</button>
+                                </div>
+                                @if (words.MarketOrders)
+                                {
+                                    <div class="segmented" role="group" aria-label="Order type">
+                                        <button type="button" aria-pressed="@Pressed(orderType == OrderType.Limit)" @onclick="() => orderType = OrderType.Limit">Limit</button>
+                                        <button type="button" aria-pressed="@Pressed(orderType == OrderType.Market)" @onclick="() => orderType = OrderType.Market">Market</button>
+                                    </div>
+                                }
+                                <div class="ticket-row">
+                                    <div class="field">
+                                        <label for="quantity">@words.Quantity</label>
+                                        <input id="quantity" type="number" inputmode="numeric" min="1" max="@mode.MaxOrderQuantity" step="1"
+                                               @bind="quantity" @bind:event="oninput" />
+                                    </div>
+                                    <div class="field" hidden="@(orderType == OrderType.Market)">
+                                        <label for="price">@words.Price</label>
+                                        <input id="price" type="number" inputmode="numeric" min="1" step="1" @bind="price" @bind:event="oninput" />
+                                    </div>
+                                </div>
+                                <button class="btn submit @(side == Side.Buy ? "buy" : "sell")" type="submit"
+                                        disabled="@(submitting || phase != RoomPhase.Trading)">@TicketLabel</button>
+                                <p class="ticket-result @(ticketRejected ? "rejected" : "")" role="status">@ticketMessage</p>
+                            </form>
+                        </section>
+
+                        <section class="panel panel-orders" aria-labelledby="orders-title">
+                            <h2 id="orders-title">@words.OrdersTitle</h2>
+                            <ul class="orders">
+                                @if (phase != RoomPhase.Trading)
+                                {
+                                    <li class="empty">The round is over. Any orders still waiting were cancelled.</li>
+                                }
+                                else if (me.OpenOrders.Count == 0)
+                                {
+                                    <li class="empty">@words.NoOrders</li>
+                                }
+                                else
+                                {
+                                    @foreach (var order in me.OpenOrders)
+                                    {
+                                        <li>
+                                            <span>
+                                                <span class="@(order.Side == Side.Buy ? "side-buy" : "side-sell")">@order.Side</span>
+                                                @Format.Number(order.Remaining) at @Format.Number(order.Price)
+                                            </span>
+                                            <button class="btn btn-light btn-sm" type="button"
+                                                    aria-label="Cancel @order.Side.ToString().ToLowerInvariant() @order.Remaining at @order.Price"
+                                                    @onclick="() => Cancel(order.OrderId)">Cancel</button>
+                                        </li>
+                                    }
+                                }
+                            </ul>
+                        </section>
+                    </div>
+                }
+
+                <section class="panel panel-book" aria-labelledby="book-title">
+                    <div class="panel-head">
+                        <h2 id="book-title">@words.Book</h2>
+                        @if (!IsHost)
+                        {
+                            <small>@words.BookHint</small>
+                        }
+                    </div>
+                    <OrderBook Book="book" Words="words" Clickable="@(!IsHost && phase == RoomPhase.Trading)" OnPick="PickLevel" />
+                </section>
+
+                <div class="stack feeds">
+                    <section class="panel panel-news" aria-labelledby="news-title">
+                        <h2 id="news-title">@words.News</h2>
+                        <ul class="feed news" aria-live="polite">
+                            @if (clues.Count == 0)
+                            {
+                                <li class="empty">@words.NoNews</li>
+                            }
+                            @foreach (var clue in clues.Values.Reverse())
+                            {
+                                <li><span class="tag" aria-hidden="true">@clue.Die</span>@clue.Text</li>
+                            }
+                        </ul>
+                    </section>
+                    <section class="panel panel-tape" aria-labelledby="tape-title">
+                        <h2 id="tape-title">@words.Trades</h2>
+                        <ul class="feed tape">
+                            @if (tape.Count == 0)
+                            {
+                                <li class="empty">@words.NoTrades</li>
+                            }
+                            @foreach (var t in tape)
+                            {
+                                var bought = t.AggressorSide == Side.Buy;
+                                <li>
+                                    <span class="@(bought ? "side-buy" : "side-sell")">@(bought ? "Bought" : "Sold")</span>
+                                    @if (mode!.Audience == Audience.Explorer)
+                                    {
+                                        <span>@Format.Number(t.Quantity) @mode.Unit</span>
+                                        <span>@Format.Number(t.Price) coins each</span>
+                                    }
+                                    else
+                                    {
+                                        <span>@Format.Number(t.Quantity) @@ @Format.Number(t.Price)</span>
+                                        <span class="muted">#@t.Sequence</span>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    </section>
+                </div>
+            </div>
+        </main>
+        break;
+}
+
+@code {
+    [Parameter] public string Code { get; set; } = "";
+
+    private enum Screen { Loading, Message, Room }
+
+    private const int TapeLength = 60;
+
+    private Screen screen = Screen.Loading;
+    private string messageTitle = "";
+    private string messageBody = "";
+    private bool offerJoin;
+    private bool offerPlayerLink;
+
+    private Seat? seat;
+    private ModeSummary? mode;
+    private Vocabulary words = Vocabulary.Trader;
+    private RoomPhase phase;
+    private int playerCount;
+    private readonly SortedDictionary<int, ClueView> clues = [];
+    private List<PublicTrade> tape = [];
+    private BookSnapshot book = new("", -1, [], []);
+    private AccountView? me;
+    private SettlementView? settlement;
+    private IReadOnlyList<int> flip = [];
+    private SettlementPanel? results;
+
+    // Order ticket
+    private Side side = Side.Buy;
+    private OrderType orderType = OrderType.Limit;
+    private long quantity = 1;
+    private long? price;
+    private bool submitting;
+    private string? ticketMessage;
+    private bool ticketRejected;
+
+    private bool busy;
+    private bool settleArmed;
+    private HubConnection? hub;
+    private bool closing;
+    private bool meInFlight;
+    private bool meQueued;
+
+    private bool IsHost => Nav.ToBaseRelativePath(Nav.Uri).StartsWith("host/", StringComparison.OrdinalIgnoreCase);
+    private string HostName => new Uri(Nav.BaseUri).Authority;
+    private int DiceLeft => mode is null ? 0 : mode.DiceCount - clues.Count;
+    private static string Pressed(bool on) => on ? "true" : "false";
+
+    private string PlayerCountText => playerCount switch
+    {
+        0 => "Waiting for players to join.",
+        1 => "1 player has joined.",
+        _ => $"{playerCount} players have joined.",
+    };
+
+    /// <summary>What this viewer can see: every die once settled, otherwise the news plus their own die.</summary>
+    private IReadOnlyDictionary<int, int> Known => settlement is not null
+        ? settlement.Dice.Select((value, i) => (Die: i + 1, value)).ToDictionary(x => x.Die, x => x.value)
+        : FairValue.Known(clues.Values, me?.PrivateClue);
+
+    /// <summary>Profit if the round ended at today's fair value (or the final value once settled).</summary>
+    private decimal Pnl
+    {
+        get
+        {
+            if (me is null || mode is null)
+            {
+                return 0;
+            }
+
+            var value = settlement?.TrueValue ?? FairValue.Of(mode, Known).Value;
+            return me.Cash + (me.Position * value) - mode.StartingCash;
+        }
+    }
+
+    private string TicketLabel
+    {
+        get
+        {
+            var verb = side == Side.Buy ? "Buy" : "Sell";
+            return orderType == OrderType.Market ? $"{verb} {quantity} at the best price" : $"{verb} {quantity} at {price?.ToString() ?? "…"}";
+        }
+    }
+
+    // ---------- Opening the room ----------
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Code = Code.ToUpperInvariant();
+        await Open();
+    }
+
+    private async Task Open()
+    {
+        screen = Screen.Loading;
+        var loaded = await Api.GetRoom(Code);
+        if (!loaded.Ok || loaded.Data is null)
+        {
+            ShowMessage(loaded.Status == System.Net.HttpStatusCode.NotFound ? "Room not found" : "Something went wrong",
+                loaded.Status == System.Net.HttpStatusCode.NotFound
+                    ? $"There's no room with the code {Code}. Check the code with your host."
+                    : loaded.Error ?? "Try again in a moment.");
+            return;
+        }
+
+        var room = loaded.Data;
+        seat = await Seats.Find(Code);
+
+        if (IsHost)
+        {
+            if (seat?.Role != SeatRole.Host)
+            {
+                ShowMessage("This page is for the host", "Only the browser that created this room can run it.", playerLink: true);
+                return;
+            }
+        }
+        else
+        {
+            if (seat?.Role == SeatRole.Player && await Api.GetMe(Code, seat.Key) is { Ok: true, Data: { } account })
+            {
+                me = account;
+            }
+            else
+            {
+                if (seat?.Role == SeatRole.Player)
+                {
+                    await Seats.ForgetPlayer(Code);
+                }
+
+                if (room.Phase != RoomPhase.Trading)
+                {
+                    ShowMessage("This round is over", "Ask your host to start a new game, then join with the new code.");
+                }
+                else
+                {
+                    ShowMessage($"Join {room.Mode.Name}", room.Mode.Description, join: true);
+                }
+
+                return;
+            }
+        }
+
+        mode = room.Mode;
+        words = Vocabulary.For(mode.Audience);
+        ApplyRoom(room);
+        price ??= (long)Math.Round(FairValue.Of(mode, Known).Value);
+        screen = Screen.Room;
+        await Connect();
+
+        if (!IsHost)
+        {
+            await HowTo.ShowFirstTime(HowTo.MarketMaker);
+        }
+    }
+
+    private void ShowMessage(string title, string body, bool join = false, bool playerLink = false)
+    {
+        (messageTitle, messageBody, offerJoin, offerPlayerLink) = (title, body, join, playerLink);
+        screen = Screen.Message;
+    }
+
+    private async Task JoinNow()
+    {
+        busy = true;
+        var joined = await Api.JoinRoom(Code);
+        busy = false;
+        if (!joined.Ok || joined.Data is null)
+        {
+            Toasts.Show(joined.Error ?? "Couldn't join the room.");
+            return;
+        }
+
+        await Seats.SavePlayer(Code, joined.Data.TraderKey);
+        await Open();
+    }
+
+    // ---------- Live updates ----------
+
+    private async Task Connect()
+    {
+        hub = new HubConnectionBuilder()
+            .WithUrl(Nav.ToAbsoluteUri(MarketEvents.HubPath))
+            .WithAutomaticReconnect()
+            .AddJsonProtocol(o =>
+            {
+                o.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, TradegroundJsonContext.Default);
+                o.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            })
+            .Build();
+
+        hub.On<BookSnapshot>(MarketEvents.BookUpdated, snapshot => OnUi(() => ApplyBook(snapshot)));
+        hub.On<List<PublicTrade>>(MarketEvents.TradesExecuted, trades => OnUi(() => MergeTape(trades)));
+        hub.On<ClueView>(MarketEvents.ClueRevealed, clue => OnUi(() => ApplyClue(clue, live: true)));
+        hub.On<int>(MarketEvents.PlayerJoined, count => OnUi(() => playerCount = count));
+        hub.On<SettlementView>(MarketEvents.RoundSettled, s => OnUi(() => ApplySettlement(s)));
+
+        hub.Reconnecting += _ => OnUi(() => Toasts.Show("Connection lost. Reconnecting…"));
+        hub.Reconnected += _ => InvokeAsync(async () =>
+        {
+            if (await CatchUp())
+            {
+                Toasts.Show("Reconnected.");
+            }
+        });
+        hub.Closed += _ => OnUi(() =>
+        {
+            if (!closing)
+            {
+                Toasts.Show("Lost connection to the game. Refresh the page to rejoin.");
+            }
+        });
+
+        try
+        {
+            await hub.StartAsync();
+            await CatchUp();
+        }
+        catch (HttpRequestException)
+        {
+            Toasts.Show("Live updates are unavailable. Refresh the page to try again.");
+        }
+    }
+
+    /// <summary>Subscribe first, then fetch: nothing can happen in between that we'd miss.</summary>
+    private async Task<bool> CatchUp()
+    {
+        try
+        {
+            ApplyBook(await hub!.InvokeAsync<BookSnapshot>(MarketEvents.Subscribe, Code));
+        }
+        catch (HubException)
+        {
+            await HandleLostRoom();
+            return false;
+        }
+
+        if (await Api.GetRoom(Code) is { Ok: true, Data: { } room })
+        {
+            ApplyRoom(room);
+        }
+
+        await RefreshMe();
+        StateHasChanged();
+        return true;
+    }
+
+    /// <summary>Rooms live in server memory, so a server restart ends every round. Say so plainly.</summary>
+    private async Task HandleLostRoom()
+    {
+        closing = true;
+        if (hub is not null)
+        {
+            await hub.StopAsync();
+        }
+
+        if (!IsHost)
+        {
+            await Seats.ForgetPlayer(Code);
+        }
+
+        ShowMessage("This room has closed", "The game server restarted, which ends every round in progress. Ask your host for a new room code.");
+        StateHasChanged();
+    }
+
+    private Task OnUi(Action change) => InvokeAsync(() =>
+    {
+        change();
+        StateHasChanged();
+    });
+
+    // ---------- State updates ----------
+
+    private void ApplyRoom(RoomView room)
+    {
+        phase = room.Phase;
+        playerCount = room.PlayerCount;
+        foreach (var clue in room.PublicClues)
+        {
+            clues[clue.Die] = clue;
+        }
+
+        MergeTape(room.RecentTrades);
+        settlement ??= room.Settlement;
+    }
+
+    private void ApplyBook(BookSnapshot snapshot)
+    {
+        // Pushes from different requests can arrive out of order; never go backwards.
+        if (snapshot.LastSequence < book.LastSequence)
+        {
+            return;
+        }
+
+        book = snapshot;
+        _ = RefreshMe();
+    }
+
+    private void MergeTape(IEnumerable<PublicTrade> trades)
+    {
+        var seen = tape.Select(t => t.Sequence).ToHashSet();
+        tape = tape.Concat(trades.Where(t => !seen.Contains(t.Sequence)))
+            .OrderByDescending(t => t.Sequence)
+            .Take(TapeLength)
+            .ToList();
+    }
+
+    private void ApplyClue(ClueView clue, bool live)
+    {
+        if (!clues.TryAdd(clue.Die, clue))
+        {
+            return;
+        }
+
+        flip = [clue.Die];
+        if (live)
+        {
+            Toasts.Show(clue.Text);
+        }
+    }
+
+    private void ApplySettlement(SettlementView s)
+    {
+        if (settlement is not null)
+        {
+            return; // Both the REST reply and the push deliver it; handle it once.
+        }
+
+        // The big reveal: every die nobody had seen turns over, one by one.
+        flip = Enumerable.Range(1, mode!.DiceCount).Where(n => !Known.ContainsKey(n)).ToList();
+        phase = RoomPhase.Settled;
+        settlement = s;
+        _ = InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await Task.Yield();
+            if (results is not null)
+            {
+                await JS.InvokeVoidAsync("tradeground.scrollIntoView", results.Element);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Re-reads the player's cash, position and orders. Many pushes can arrive together: keep at most
+    /// one request in flight plus one queued, instead of one per push.
+    /// </summary>
+    private async Task RefreshMe()
+    {
+        if (IsHost || seat is null)
+        {
+            return;
+        }
+
+        if (meInFlight)
+        {
+            meQueued = true;
+            return;
+        }
+
+        meInFlight = true;
+        var previous = me;
+        var result = await Api.GetMe(Code, seat.Key);
+        meInFlight = false;
+
+        if (result is { Ok: true, Data: { } account })
+        {
+            me = account;
+            if (previous is not null && previous.Position != account.Position && !submitting)
+            {
+                var change = account.Position - previous.Position;
+                Toasts.Show($"Your order traded: you {(change > 0 ? "bought" : "sold")} {Math.Abs(change)} {mode?.Unit}.");
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+
+        if (meQueued)
+        {
+            meQueued = false;
+            await RefreshMe();
+        }
+    }
+
+    // ---------- Player actions ----------
+
+    private void PickLevel((Side Side, long Price) pick)
+    {
+        side = pick.Side;
+        orderType = OrderType.Limit;
+        price = pick.Price;
+    }
+
+    private async Task Submit()
+    {
+        if (seat is null || mode is null)
+        {
+            return;
+        }
+
+        if (quantity < 1 || quantity > mode.MaxOrderQuantity)
+        {
+            (ticketMessage, ticketRejected) = ($"Choose a whole number from 1 to {mode.MaxOrderQuantity}.", true);
+            return;
+        }
+
+        if (orderType == OrderType.Limit && price is null or < 1)
+        {
+            (ticketMessage, ticketRejected) = ("Choose a whole-number price of 1 or more.", true);
+            return;
+        }
+
+        submitting = true;
+        var response = await Api.PlaceOrder(Code, seat.Key,
+            new PlaceOrderRequest(side, orderType, quantity, orderType == OrderType.Limit ? price : null));
+        await RefreshMe();
+        submitting = false;
+
+        if (!response.Ok || response.Data is not { } r)
+        {
+            (ticketMessage, ticketRejected) = (response.Error, true);
+            return;
+        }
+
+        if (r.Status == OrderStatus.Rejected)
+        {
+            (ticketMessage, ticketRejected) = (r.RejectReason, true);
+            return;
+        }
+
+        var did = side == Side.Buy ? "Bought" : "Sold";
+        var filled = r.Fills.Sum(f => f.Quantity);
+        var average = filled == 0 ? 0 : r.Fills.Sum(f => f.Price * f.Quantity) / (decimal)filled;
+        var at = r.Fills.Count == 1 ? $"at {Format.Number(r.Fills[0].Price)}" : $"at an average of {Format.Number(Math.Round(average, 1))}";
+
+        ticketRejected = false;
+        ticketMessage = r.Status switch
+        {
+            OrderStatus.Filled => $"{did} {filled} {at}.",
+            OrderStatus.PartiallyFilled => $"{did} {filled} {at}. The other {r.RestingQuantity} wait on the book at {Format.Number(price ?? 0)}.",
+            OrderStatus.Resting => $"Nobody matched yet. Your order for {r.RestingQuantity} at {Format.Number(price ?? 0)} waits on the book.",
+            OrderStatus.RemainderCancelled when filled > 0 => $"{did} {filled} {at}. There was nothing left to trade with, so the other {quantity - filled} were cancelled.",
+            OrderStatus.RemainderCancelled => "There was nothing to trade with, so the order was cancelled.",
+            _ => r.Status.ToString(),
+        };
+    }
+
+    private async Task Cancel(long orderId)
+    {
+        if (seat is null)
+        {
+            return;
+        }
+
+        var result = await Api.CancelOrder(Code, seat.Key, orderId);
+        if (!result.Ok)
+        {
+            Toasts.Show(result.Status == System.Net.HttpStatusCode.NotFound ? "That order already traded or was cancelled." : result.Error ?? "Couldn't cancel.");
+        }
+
+        await RefreshMe();
+    }
+
+    // ---------- Host actions ----------
+
+    private async Task Reveal()
+    {
+        busy = true;
+        var result = await Api.RevealClue(Code, seat!.Key);
+        busy = false;
+        if (result is { Ok: true, Data: { } clue })
+        {
+            ApplyClue(clue, live: true);
+        }
+        else
+        {
+            Toasts.Show(result.Error ?? "Couldn't reveal a die.");
+        }
+    }
+
+    /// <summary>Ending a round can't be undone, so the button asks twice instead of opening a dialog.</summary>
+    private async Task EndRound()
+    {
+        if (!settleArmed)
+        {
+            settleArmed = true;
+            _ = InvokeAsync(async () =>
+            {
+                await Task.Delay(4000);
+                settleArmed = false;
+                StateHasChanged();
+            });
+            return;
+        }
+
+        busy = true;
+        var result = await Api.Settle(Code, seat!.Key);
+        busy = false;
+        if (result is { Ok: true, Data: { } s })
+        {
+            ApplySettlement(s);
+        }
+        else
+        {
+            Toasts.Show(result.Error ?? "Couldn't end the round.");
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        closing = true;
+        if (hub is not null)
+        {
+            await hub.DisposeAsync();
+        }
+    }
+}

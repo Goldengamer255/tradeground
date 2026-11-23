@@ -4,6 +4,7 @@ using Tradeground.Api.Charts;
 using Tradeground.Api.Endpoints;
 using Tradeground.Api.Hubs;
 using Tradeground.Api.Rooms;
+using Tradeground.Contracts;
 using Tradeground.Game;
 using Tradeground.Game.Charts;
 
@@ -20,6 +21,7 @@ builder.Services.AddSingleton(_ => ModeCatalog.LoadBuiltIn());
 builder.Services.AddSingleton<RoomRegistry>();
 builder.Services.AddSingleton(_ => ChartLibrary.LoadBuiltIn());
 builder.Services.AddSingleton<ChartRunStore>();
+builder.Services.AddSingleton<ChartHighlights>();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
 
@@ -42,35 +44,41 @@ app.Use(async (context, next) =>
     }
 });
 
-// Security headers on every response. The page loads nothing from other sites (fonts and the
-// SignalR client are served from here), so the policy can be strict: only this origin, ever.
-// That blocks injected scripts, and it means no third party learns a child's IP address.
+// Security headers on every response. The site loads nothing from other origins (fonts are served
+// from here), so the policy is strict: only this origin, ever. That blocks injected scripts, and no
+// third party learns a player's IP address. 'wasm-unsafe-eval' is the one extra permission Blazor
+// needs: it lets the browser compile the .NET runtime, which is WebAssembly, not script.
 app.Use(async (context, next) =>
 {
     var headers = context.Response.Headers;
     headers.ContentSecurityPolicy =
-        "default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data:; " +
+        "base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
     headers.XContentTypeOptions = "nosniff";
     headers["Referrer-Policy"] = "no-referrer";
     await next(context);
 });
 
-// The web app is plain files in wwwroot: "/" serves index.html. One container ships both.
-// Caching: the app's own files must never be stale after a deploy (old JavaScript talking to a
-// new API is a classic bug), so the browser revalidates them every time; unchanged files cost a
-// tiny 304. Vendored libraries in /lib change only when we upgrade them, so they cache for a week.
-app.UseDefaultFiles();
+// The browser app (Tradeground.Web, Blazor WebAssembly) is served from here: one origin, one
+// container. App files revalidate on every load so a deploy is never half-old; the fonts never
+// change, so they cache for a week. Blazor's own loader also checks every runtime file by hash.
+app.UseBlazorFrameworkFiles();
 app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = context =>
         context.Context.Response.Headers.CacheControl =
-            context.Context.Request.Path.StartsWithSegments("/lib") ? "public, max-age=604800" : "no-cache",
+            context.Context.Request.Path.StartsWithSegments("/fonts") ? "public, max-age=604800" : "no-cache",
 });
 
 app.MapHealthChecks("/health");
-app.MapHub<MarketHub>("/hubs/market");
+app.MapHub<MarketHub>(MarketEvents.HubPath);
 app.MapRoomEndpoints();
 app.MapChartEndpoints();
+
+// Unknown API addresses are a 404, never the web page. Every other unknown address loads the app,
+// whose router handles it (/chart, /play/ABC123 ...), so deep links and refreshes work.
+app.MapFallback("/api/{**path}", () => Results.NotFound());
+app.MapFallbackToFile("index.html");
 
 app.Run();
 

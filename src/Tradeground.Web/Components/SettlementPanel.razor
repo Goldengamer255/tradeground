@@ -1,0 +1,56 @@
+@* The end of a Market Maker round: the true value, the ranking, and (for a player) their own sum. *@
+<section class="panel results" aria-labelledby="results-title" @ref="Element">
+    <h2 id="results-title">Round over</h2>
+    <p class="results-value">Settled at @Format.Number(Settlement.TrueValue)</p>
+    <p class="muted">@Explanation</p>
+    <table>
+        <thead>
+            <tr><th>Rank</th><th>Player</th><th>@Words.Position</th><th>@Words.Cash</th><th>Profit</th></tr>
+        </thead>
+        <tbody>
+            @if (Settlement.Results.Count == 0)
+            {
+                <tr><td colspan="5">Nobody joined this round.</td></tr>
+            }
+            @foreach (var r in Settlement.Results)
+            {
+                var me = r.DisplayName == MyName;
+                <tr class="@(me ? "me" : "")">
+                    <td>@r.Rank</td>
+                    <td>@r.DisplayName@(me ? " (you)" : "")</td>
+                    <td>@Format.Signed(r.Position)</td>
+                    <td>@Format.Number(r.Cash)</td>
+                    <td class="@(r.ProfitAndLoss > 0 ? "up" : r.ProfitAndLoss < 0 ? "down" : "")">@Format.Signed(r.ProfitAndLoss)</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public SettlementView Settlement { get; set; } = default!;
+    [Parameter, EditorRequired] public ModeSummary Mode { get; set; } = default!;
+    [Parameter, EditorRequired] public Vocabulary Words { get; set; } = default!;
+
+    /// <summary>The viewer's own name, to highlight their row; null for the host.</summary>
+    [Parameter] public string? MyName { get; set; }
+
+    public ElementReference Element { get; private set; }
+
+    private string Explanation
+    {
+        get
+        {
+            const string ZeroSum = "Every win is someone else's loss: the profits add up to zero.";
+            if (Settlement.Results.FirstOrDefault(r => r.DisplayName == MyName) is not { } me)
+            {
+                return ZeroSum;
+            }
+
+            var sign = me.Position < 0 ? Format.Minus : '+';
+            return $"You finished holding {Format.Signed(me.Position)} {Mode.Unit} and {Format.Number(me.Cash)} {Words.Cash.ToLowerInvariant()}. "
+                + $"{Format.Number(me.Cash)} {sign} {Format.Number(Math.Abs(me.Position))} × {Format.Number(Settlement.TrueValue)} "
+                + $"{Format.Minus} {Format.Number(Mode.StartingCash)} to start = {Format.Signed(me.ProfitAndLoss)}. {ZeroSum}";
+        }
+    }
+}

@@ -1,0 +1,199 @@
+@page "/"
+@inject TradegroundApi Api
+@inject Seats Seats
+@inject HowTo HowTo
+@inject NavigationManager Nav
+
+<PageTitle>Tradeground: learn to trade by playing</PageTitle>
+
+<TickerTape />
+
+<main class="page">
+    <section class="hero">
+        <div>
+            <h1>Learn to trade<br />by <span class="chip">playing.</span></h1>
+            <p class="lede">
+                Real charts from real markets. Pretend money. Three games that take you from your first
+                candle to how trading firms think.
+            </p>
+            <div class="cta">
+                <a class="btn btn-primary" href="chart">
+                    Play Up or Down
+                    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M4 9h10M10 5l4 4-4 4" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                </a>
+                <a class="btn btn-light" href="#join">Got a room code?</a>
+            </div>
+            <dl class="hero-stats">
+                <div><dt>real chart moments</dt><dd>120</dd></div>
+                <div><dt>timeframes</dt><dd>5</dd></div>
+                <div><dt>real money</dt><dd>$0</dd></div>
+            </dl>
+        </div>
+        <HeroChart />
+    </section>
+
+    <div class="section-head">
+        <h2>Pick a game</h2>
+        <p class="muted">Easiest first. Every game has a 1-minute "How to play".</p>
+    </div>
+
+    <section class="games" aria-label="Games">
+        <article class="game game-cobalt" aria-labelledby="g-updown">
+            <div class="game-art" aria-hidden="true">
+                <svg viewBox="0 0 170 90">
+                    <rect class="art-white" x="10" y="50" width="16" height="26" rx="3" />
+                    <rect class="art-peach" x="38" y="40" width="16" height="22" rx="3" />
+                    <rect class="art-white" x="66" y="28" width="16" height="30" rx="3" />
+                    <rect class="art-white" x="94" y="14" width="16" height="28" rx="3" />
+                    <line class="art-dash" x1="128" y1="6" x2="128" y2="84" />
+                    <text class="art-q art-sun" x="150" y="58" text-anchor="middle">?</text>
+                </svg>
+            </div>
+            <span class="tag">Easy</span>
+            <h3 id="g-updown">Up or Down</h3>
+            <p>A real chart stopped at "now". Zoom from 1-minute to 4-hour candles, call it, and watch what happened.</p>
+            <div class="game-meta"><span>About 1 minute</span><span>Solo</span></div>
+            <div class="game-actions">
+                <a class="btn btn-primary" href="chart">Play now</a>
+                <button class="btn btn-ghost" type="button" @onclick="() => HowTo.Show(HowTo.UpOrDown)">How to play</button>
+            </div>
+        </article>
+
+        <article class="game game-sun" aria-labelledby="g-history">
+            <div class="game-art" aria-hidden="true">
+                <svg viewBox="0 0 170 90">
+                    <polyline class="art-ink-line" points="8,70 30,58 48,64 70,40 90,48 112,24 134,30 160,12" />
+                    <circle class="art-buy" cx="48" cy="64" r="9" />
+                    <text class="art-letter" x="48" y="68" text-anchor="middle">B</text>
+                    <circle class="art-sell" cx="134" cy="30" r="9" />
+                    <text class="art-letter" x="134" y="34" text-anchor="middle">S</text>
+                </svg>
+            </div>
+            <span class="tag">Medium</span>
+            <h3 id="g-history">Trade Through History</h3>
+            <p>Pretend money in a real market moment. Solo, against computer traders, or with friends. Set the timer and go.</p>
+            <div class="game-meta"><span>2 to 10 minutes</span><span>Solo, bots or friends</span></div>
+            <span class="soon">Coming soon</span>
+        </article>
+
+        <article class="game game-lilac" aria-labelledby="g-maker">
+            <div class="game-art" aria-hidden="true">
+                <svg viewBox="0 0 170 90">
+                    <rect class="art-die" x="22" y="18" width="56" height="56" rx="13" />
+                    <circle class="art-pip" cx="38" cy="34" r="5.5" />
+                    <circle class="art-pip" cx="62" cy="58" r="5.5" />
+                    <rect class="art-hidden" x="94" y="24" width="56" height="56" rx="13" />
+                    <text class="art-hidden-q" x="122" y="62" text-anchor="middle">?</text>
+                </svg>
+            </div>
+            <span class="tag">Advanced</span>
+            <h3 id="g-maker">Market Maker</h3>
+            <p>Be the currency booth: set buy and sell prices on hidden dice and earn the gap. How trading firms think.</p>
+            <div class="game-meta"><span>10 to 15 minutes</span><span>2 or more players</span></div>
+            <div class="game-actions">
+                @if (modes is null)
+                {
+                    <span class="empty">Loading…</span>
+                }
+                else
+                {
+                    @foreach (var mode in modes)
+                    {
+                        <button class="btn btn-dark" type="button" title="@mode.Description" disabled="@hosting"
+                                @onclick="() => Host(mode)">
+                            Host @mode.Name@(mode.Audience == Audience.Explorer ? " (kids)" : "")
+                        </button>
+                    }
+                }
+                <button class="btn btn-light" type="button" @onclick="() => HowTo.Show(HowTo.MarketMaker)">How to play</button>
+            </div>
+            @if (hostError is not null)
+            {
+                <p class="form-error">@hostError</p>
+            }
+        </article>
+    </section>
+
+    <form class="join-card" id="join" @onsubmit="Join" novalidate>
+        <div>
+            <h2><label for="code">Got a room code?</label></h2>
+            <p class="muted" id="join-help">For Market Maker: your host shows the code on their screen.</p>
+        </div>
+        <div class="join-row">
+            <input class="code-input" id="code" autocomplete="off" autocapitalize="characters" spellcheck="false"
+                   maxlength="6" placeholder="ABC123" aria-describedby="join-help join-error"
+                   value="@roomCode" @oninput="CodeChanged" />
+            <button class="btn btn-primary" type="submit" disabled="@joining">Join</button>
+        </div>
+        <p class="form-error" id="join-error" role="alert">@joinError</p>
+    </form>
+
+    <p class="footnote">
+        No sign-up, no email, no real names: players get a random name like Calm Otter 81.
+        Educational only: no real money and not financial advice.
+    </p>
+</main>
+
+@code {
+    private ModeSummary[]? modes;
+    private string roomCode = "";
+    private string? joinError;
+    private string? hostError;
+    private bool joining;
+    private bool hosting;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await Api.GetModes();
+        // Kids' version first.
+        modes = (result.Data ?? []).OrderBy(m => m.Audience == Audience.Explorer ? 0 : 1).ToArray();
+        if (!result.Ok)
+        {
+            hostError = result.Error;
+        }
+    }
+
+    /// <summary>Room codes are capitals and digits only; tidy what's typed as it's typed.</summary>
+    private void CodeChanged(ChangeEventArgs e)
+    {
+        roomCode = new string((e.Value?.ToString() ?? "").ToUpperInvariant().Where(char.IsAsciiLetterOrDigit).ToArray());
+        joinError = null;
+    }
+
+    private async Task Join()
+    {
+        if (roomCode.Length != 6)
+        {
+            joinError = "Room codes have 6 letters and numbers.";
+            return;
+        }
+
+        joining = true;
+        var joined = await Api.JoinRoom(roomCode);
+        joining = false;
+        if (!joined.Ok || joined.Data is null)
+        {
+            joinError = joined.Error;
+            return;
+        }
+
+        await Seats.SavePlayer(roomCode, joined.Data.TraderKey);
+        Nav.NavigateTo($"play/{roomCode}");
+    }
+
+    private async Task Host(ModeSummary mode)
+    {
+        hosting = true;
+        hostError = null;
+        var created = await Api.CreateRoom(mode.Id);
+        hosting = false;
+        if (!created.Ok || created.Data is null)
+        {
+            hostError = created.Error;
+            return;
+        }
+
+        await Seats.SaveHost(created.Data.Code, created.Data.HostKey);
+        Nav.NavigateTo($"host/{created.Data.Code}");
+    }
+}

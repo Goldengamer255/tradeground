@@ -1,0 +1,43 @@
+@implements IDisposable
+@inject HowTo HowTo
+@inject IJSRuntime JS
+
+@* The native <dialog>: the browser handles focus, Escape and the dimmed backdrop. *@
+<dialog class="howto" aria-labelledby="howto-title" @ref="dialog">
+    @if (guide is not null)
+    {
+        <div class="howto-body">
+            <h2 id="howto-title">@guide.Title</h2>
+            <p class="howto-intro">@guide.Intro</p>
+            <ol class="howto-steps">
+                @foreach (var step in guide.Steps)
+                {
+                    <li>@step</li>
+                }
+            </ol>
+            <p class="howto-note">@guide.Note</p>
+            <button class="btn btn-primary" type="button" autofocus @onclick="Close">Got it</button>
+        </div>
+    }
+</dialog>
+
+@code {
+    private ElementReference dialog;
+    private Guide? guide;
+
+    protected override void OnInitialized() => HowTo.Opened += Open;
+
+    private void Open(Guide opened)
+    {
+        guide = opened;
+        _ = InvokeAsync(async () =>
+        {
+            StateHasChanged();
+            await JS.InvokeVoidAsync("tradeground.showDialog", dialog);
+        });
+    }
+
+    private async Task Close() => await JS.InvokeVoidAsync("tradeground.closeDialog", dialog);
+
+    public void Dispose() => HowTo.Opened -= Open;
+}

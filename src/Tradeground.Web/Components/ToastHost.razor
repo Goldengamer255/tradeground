@@ -1,0 +1,44 @@
+@implements IDisposable
+@inject Toasts Toasts
+
+<div role="status" aria-live="polite">
+    @if (message is not null)
+    {
+        @* The key makes a new message replay the slide-in animation. *@
+        <div class="toast" @key="version">@message</div>
+    }
+</div>
+
+@code {
+    private string? message;
+    private int version;
+    private CancellationTokenSource? hide;
+
+    protected override void OnInitialized() => Toasts.Shown += Show;
+
+    private void Show(string text) => _ = InvokeAsync(async () =>
+    {
+        message = text;
+        version++;
+        StateHasChanged();
+
+        hide?.Cancel();
+        hide = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(3500, hide.Token);
+            message = null;
+            StateHasChanged();
+        }
+        catch (TaskCanceledException)
+        {
+            // A newer message replaced this one.
+        }
+    });
+
+    public void Dispose()
+    {
+        Toasts.Shown -= Show;
+        hide?.Cancel();
+    }
+}

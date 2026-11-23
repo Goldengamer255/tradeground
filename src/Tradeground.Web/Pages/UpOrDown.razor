@@ -1,0 +1,347 @@
+@page "/chart"
+@implements IAsyncDisposable
+@inject TradegroundApi Api
+@inject BrowserStorage Storage
+@inject HowTo HowTo
+@inject IJSRuntime JS
+
+<PageTitle>Up or Down · Tradeground</PageTitle>
+
+<main class="page">
+    @if (error is not null)
+    {
+        <Notice Title="Couldn't load the chart" Body="@error">
+            <a class="btn btn-primary" href="">Back to the games</a>
+        </Notice>
+    }
+    else if (chart is null)
+    {
+        <p class="waiting">Dealing a chart…</p>
+    }
+    else
+    {
+        <div class="play">
+            <section>
+                <div class="play-head">
+                    <div class="title-row">
+                        <h1>Up or down?</h1>
+                        <button class="btn btn-light btn-sm" type="button" @onclick="() => HowTo.Show(HowTo.UpOrDown)">How to play</button>
+                    </div>
+                    <div class="tabs" role="group" aria-label="Candle timeframe">
+                        @foreach (var t in timeframes)
+                        {
+                            <button type="button" title="Each candle is @t.Label" aria-pressed="@(t.Id == timeframe ? "true" : "false")"
+                                    disabled="@(busy || Replaying)" @onclick="() => Zoom(t.Id)">@t.Id</button>
+                        }
+                    </div>
+                </div>
+
+                <figure class="card">
+                    <CandleChart Candles="Visible" ScaleTo="chart.Candles" Slots="@(chart.HistoryCandles + chart.Horizon)"
+                                 NowSlot="chart.HistoryCandles" ShowFuture="@(chart.Result is null)"
+                                 CallLevel="@(chart.Result is null ? null : chart.Candles[chart.HistoryCandles - 1].Close)"
+                                 FreshIndex="@(Replaying ? shown - 1 : null)" />
+                    <figcaption class="chart-caption">The same chart on every timeframe. Prices are an index where "now" is 100.</figcaption>
+                </figure>
+
+                @if (chart.Result is null)
+                {
+                    <p class="question">Where will the price be <mark>@Format.Duration(timeframe, chart.Horizon)</mark> from now?</p>
+                    <div class="calls">
+                        <button class="call call-up" type="button" disabled="@busy" aria-keyshortcuts="ArrowUp" @onclick="() => Call(Direction.Up)">
+                            <svg viewBox="0 0 26 26" aria-hidden="true"><path d="M13 21V6M6 12l7-7 7 7" stroke="#fff" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                            Up
+                        </button>
+                        <button class="call call-down" type="button" disabled="@busy" aria-keyshortcuts="ArrowDown" @onclick="() => Call(Direction.Down)">
+                            <svg viewBox="0 0 26 26" aria-hidden="true"><path d="M13 5v15M6 14l7 7 7-7" stroke="#fff" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                            Down
+                        </button>
+                    </div>
+                    <p class="keys-hint">Zoom in and out first if you like. The market and dates stay hidden until you call. Keyboard: ↑ or ↓.</p>
+                }
+                else
+                {
+                    <p class="question">Switch timeframes to see what happened at every zoom level.</p>
+                }
+            </section>
+
+            <aside class="side" aria-label="Your run">
+                <div class="streak">
+                    <div class="streak-top">
+                        <span class="flame" aria-hidden="true">
+                            <svg width="24" height="24" viewBox="0 0 24 24"><path d="M12 3c1 3 5 5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3-1-5 1-8.5z" fill="#fff" /></svg>
+                        </span>
+                        <div>
+                            <span class="streak-count">@Stats.Streak</span>
+                            <small>in a row. Best: @Stats.BestStreak</small>
+                        </div>
+                    </div>
+                    <div class="pips" aria-label="Your last @Recent.Count calls">
+                        @for (var i = 0; i < 7; i++)
+                        {
+                            var outcome = i < Recent.Count ? Recent[i] : (bool?)null;
+                            var css = i >= Recent.Count ? "pip" : outcome switch { true => "pip win", false => "pip loss", _ => "pip flat" };
+                            <span class="@css"></span>
+                        }
+                    </div>
+                </div>
+
+                <dl class="tally">
+                    <div><dt>right</dt><dd>@Stats.Right</dd></div>
+                    <div><dt>wrong</dt><dd>@Stats.Wrong</dd></div>
+                </dl>
+
+                <div role="status" aria-live="polite">
+                    @if (chart.Result is { } result && chart.Reveal is { } reveal)
+                    {
+                        if (Replaying)
+                        {
+                            <p class="waiting">Replaying what happened next…</p>
+                        }
+                        else
+                        {
+                            var css = result.Correct switch { true => "verdict win", false => "verdict loss", _ => "verdict flat" };
+                            <section class="@css" aria-labelledby="verdict-title">
+                                @if (result.Correct == true && !reducedMotion)
+                                {
+                                    <div class="confetti" aria-hidden="true">
+                                        @for (var i = 0; i < 18; i++)
+                                        {
+                                            <i></i>
+                                        }
+                                    </div>
+                                }
+                                <h2 id="verdict-title">@Headline(result)</h2>
+                                <p>
+                                    You called @(result.Call == Direction.Up ? "up" : "down") on the @result.Timeframe chart.
+                                    It was @reveal.Name, from @Format.When(reveal.Now) to @Format.When(reveal.DecidedAt):
+                                    the real price went from @reveal.PriceNow to @reveal.EndPrice.
+                                </p>
+                                <div class="verdict-actions">
+                                    <button class="btn btn-dark" type="button" @onclick="Deal">Next chart</button>
+                                </div>
+                            </section>
+                        }
+                    }
+                </div>
+            </aside>
+        </div>
+    }
+</main>
+
+@code {
+    private const string KeyName = "tradeground.chart";
+    private const string TimeframeName = "tradeground.chart.timeframe";
+    private const int ReplayMs = 70;
+
+    private TimeframeView[] timeframes = [];
+    private string timeframe = "15m";
+    private string? key;
+    private ChartView? chart;
+    private string? error;
+    private bool busy;
+    private bool reducedMotion;
+
+    // How many candles are drawn: grows during the replay after a call.
+    private int shown;
+
+    // The tally from before the call, shown during the replay so the counters don't give the answer away.
+    private RunStats? statsBefore;
+
+    // This visit's last few outcomes, newest first, for the pips under the streak.
+    private readonly List<bool?> recent = [];
+
+    private DotNetObjectReference<UpOrDown>? self;
+    private IJSObjectReference? keys;
+
+    private bool Replaying => chart is not null && shown < chart.Candles.Count;
+    private IReadOnlyList<CandleView> Visible => chart is null ? [] : chart.Candles.Take(shown).ToList();
+    private RunStats Stats => (Replaying ? statsBefore : null) ?? chart!.Stats;
+    private IReadOnlyList<bool?> Recent => Replaying ? recent.Skip(1).ToList() : recent;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var loaded = await Api.GetTimeframes();
+        if (!loaded.Ok || loaded.Data is null)
+        {
+            error = loaded.Error;
+            return;
+        }
+
+        timeframes = loaded.Data;
+        if (await Storage.GetSession(TimeframeName) is { } saved && timeframes.Any(t => t.Id == saved))
+        {
+            timeframe = saved;
+        }
+
+        // Carry on with this tab's run after a refresh, or start a new one.
+        key = await Storage.GetSession(KeyName);
+        if (key is not null && await Api.GetChart(key, timeframe) is { Ok: true, Data: { } existing })
+        {
+            chart = existing;
+        }
+        else
+        {
+            var started = await Api.StartChart(timeframe);
+            if (!started.Ok || started.Data is null)
+            {
+                error = started.Error;
+                return;
+            }
+
+            key = started.Data.Key;
+            chart = started.Data.Chart;
+            await Storage.SetSession(KeyName, key);
+        }
+
+        shown = chart.Candles.Count;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            reducedMotion = await JS.InvokeAsync<bool>("tradeground.prefersReducedMotion");
+            self = DotNetObjectReference.Create(this);
+            keys = await JS.InvokeAsync<IJSObjectReference>("tradeground.listenForKeys", self, new[] { "ArrowUp", "ArrowDown", "Enter" });
+            if (chart is not null)
+            {
+                await HowTo.ShowFirstTime(HowTo.UpOrDown);
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnShortcut(string pressed)
+    {
+        if (chart is null || busy)
+        {
+            return;
+        }
+
+        if (chart.Result is null && pressed is "ArrowUp" or "ArrowDown")
+        {
+            await Call(pressed == "ArrowUp" ? Direction.Up : Direction.Down);
+        }
+        else if (chart.Result is not null && !Replaying && pressed == "Enter")
+        {
+            await Deal();
+        }
+
+        StateHasChanged();
+    }
+
+    /// <summary>Shows the same chart at another timeframe. Looking never changes the game.</summary>
+    private async Task Zoom(string id)
+    {
+        if (busy || key is null)
+        {
+            return;
+        }
+
+        busy = true;
+        timeframe = id;
+        await Storage.SetSession(TimeframeName, id);
+        var view = await Api.GetChart(key, id);
+        busy = false;
+        if (view is { Ok: true, Data: { } data })
+        {
+            chart = data;
+            shown = data.Candles.Count;
+        }
+    }
+
+    private async Task Call(Direction direction)
+    {
+        if (busy || key is null || chart is null || chart.Result is not null)
+        {
+            return;
+        }
+
+        busy = true;
+        var response = await Api.CallChart(key, direction, timeframe);
+        busy = false;
+        if (response is not { Ok: true, Data: { } called })
+        {
+            error = response.Error;
+            return;
+        }
+
+        statsBefore = chart.Stats;
+        chart = called;
+        recent.Insert(0, called.Result?.Correct);
+        if (recent.Count > 7)
+        {
+            recent.RemoveAt(recent.Count - 1);
+        }
+
+        await Replay();
+    }
+
+    /// <summary>Reveals the future one candle at a time: the moment of truth.</summary>
+    private async Task Replay()
+    {
+        if (chart is null)
+        {
+            return;
+        }
+
+        if (reducedMotion)
+        {
+            shown = chart.Candles.Count;
+            return;
+        }
+
+        for (shown = chart.HistoryCandles; shown < chart.Candles.Count; shown++)
+        {
+            StateHasChanged();
+            await Task.Delay(ReplayMs);
+        }
+    }
+
+    private async Task Deal()
+    {
+        if (busy || key is null)
+        {
+            return;
+        }
+
+        busy = true;
+        var next = await Api.NextChart(key, timeframe);
+        busy = false;
+        if (next is { Ok: true, Data: { } data })
+        {
+            chart = data;
+            shown = data.Candles.Count;
+        }
+    }
+
+    private string Headline(CallView result)
+    {
+        var span = Format.Duration(result.Timeframe, chart!.Horizon);
+        return result.Correct switch
+        {
+            true => $"Right! {(result.Actual == Direction.Up ? "Up" : "Down")} {Format.PercentSize(result.ChangePercent)} in {span}",
+            false => $"Not this time. It went {(result.Actual == Direction.Up ? "up" : "down")} {Format.PercentSize(result.ChangePercent)} in {span}",
+            _ => $"Flat. The price ended exactly where it was, {span} later",
+        };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (keys is not null)
+        {
+            try
+            {
+                await keys.InvokeVoidAsync("dispose");
+                await keys.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The page is already gone.
+            }
+        }
+
+        self?.Dispose();
+    }
+}

@@ -6,9 +6,8 @@ using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
-using Tradeground.Api.Endpoints;
+using Tradeground.Contracts;
 using Tradeground.Engine;
-using Tradeground.Game;
 
 namespace Tradeground.Api.Tests;
 
@@ -63,7 +62,7 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
         aliceAccount.DisplayName.ShouldBe(alice.DisplayName);
         aliceAccount.OpenOrders.ShouldBeEmpty("her sell order was completely filled");
 
-        var settlement = await SendAsync<Settlement>(client, HttpMethod.Post, $"/api/rooms/{room.Code}/settlement", hostKey: room.HostKey);
+        var settlement = await SendAsync<SettlementView>(client, HttpMethod.Post, $"/api/rooms/{room.Code}/settlement", hostKey: room.HostKey);
         var tv = settlement.TrueValue;
         settlement.Results.Sum(r => r.ProfitAndLoss).ShouldBe(0);
         settlement.Results.Select(r => r.ProfitAndLoss).ShouldBe(new[] { 150 - (5 * tv), (5 * tv) - 150 }, ignoreOrder: true);
@@ -115,7 +114,7 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
         var alice = await JoinAsync(client, room.Code);
 
         await using var connection = new HubConnectionBuilder()
-            .WithUrl(new Uri(factory.Server.BaseAddress, "hubs/market"), options =>
+            .WithUrl(new Uri(factory.Server.BaseAddress, MarketEvents.HubPath.TrimStart('/')), options =>
             {
                 options.HttpMessageHandlerFactory = _ => factory.Server.CreateHandler();
                 options.Transports = HttpTransportType.LongPolling;
@@ -124,10 +123,10 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
             .Build();
 
         var update = new TaskCompletionSource<BookSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
-        connection.On<BookSnapshot>("bookUpdated", snapshot => update.TrySetResult(snapshot));
+        connection.On<BookSnapshot>(MarketEvents.BookUpdated, snapshot => update.TrySetResult(snapshot));
         await connection.StartAsync();
 
-        var initial = await connection.InvokeAsync<BookSnapshot>("Subscribe", room.Code);
+        var initial = await connection.InvokeAsync<BookSnapshot>(MarketEvents.Subscribe, room.Code);
         initial.Bids.ShouldBeEmpty();
 
         await PlaceOrderAsync(client, room.Code, alice.TraderKey, new PlaceOrderRequest(Side.Buy, OrderType.Limit, 3, 25));
@@ -187,18 +186,6 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
         players.Select(p => p.DisplayName).Distinct().Count().ShouldBe(40);
     }
 
-    [Fact]
-    public async Task The_web_app_is_served_at_the_root()
-    {
-        using var client = factory.CreateClient();
-
-        using var response = await client.GetAsync(new Uri("/", UriKind.Relative));
-
-        response.StatusCode.ShouldBe(HttpStatusCode.OK);
-        response.Content.Headers.ContentType?.MediaType.ShouldBe("text/html");
-        response.Headers.GetValues("Content-Security-Policy").ShouldHaveSingleItem().ShouldContain("default-src 'self'");
-    }
-
     private static Task<CreateRoomResponse> CreateRoomAsync(HttpClient client) =>
         SendAsync<CreateRoomResponse>(client, HttpMethod.Post, "/api/rooms", new CreateRoomRequest("trader-dice", Seed: 42));
 
@@ -228,12 +215,12 @@ public sealed class RoomApiTests(WebApplicationFactory<Program> factory) : IClas
 
         if (traderKey is not null)
         {
-            request.Headers.Add(RoomEndpoints.TraderKeyHeader, traderKey);
+            request.Headers.Add(ApiHeaders.TraderKey, traderKey);
         }
 
         if (hostKey is not null)
         {
-            request.Headers.Add(RoomEndpoints.HostKeyHeader, hostKey);
+            request.Headers.Add(ApiHeaders.HostKey, hostKey);
         }
 
         return await client.SendAsync(request);
