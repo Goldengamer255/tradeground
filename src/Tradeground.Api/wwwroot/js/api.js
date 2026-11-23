@@ -57,6 +57,8 @@ export const settle = (code, hostKey) => request("POST", `${room(code)}/settleme
 // Chart Replay (solo).
 export const getTimeframes = () => request("GET", "/api/charts/timeframes");
 export const startChart = (timeframe) => request("POST", "/api/charts", { body: { timeframe } });
-export const getChart = (chartKey) => request("GET", "/api/charts/mine", { chartKey });
+export const getChart = (chartKey, timeframe) =>
+  request("GET", `/api/charts/mine?timeframe=${encodeURIComponent(timeframe)}`, { chartKey });
 export const nextChart = (chartKey, timeframe) => request("POST", "/api/charts/mine/next", { chartKey, body: { timeframe } });
-export const callChart = (chartKey, direction) => request("POST", "/api/charts/mine/call", { chartKey, body: { direction } });
+export const callChart = (chartKey, direction, timeframe) =>
+  request("POST", "/api/charts/mine/call", { chartKey, body: { direction, timeframe } });

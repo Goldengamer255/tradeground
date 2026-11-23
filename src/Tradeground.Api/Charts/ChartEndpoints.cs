@@ -4,9 +4,9 @@ using Tradeground.Game.Charts;
 namespace Tradeground.Api.Charts;
 
 /// <summary>
-/// Chart Replay: a solo game on real historical charts. Look at the chart, call Up or Down once,
-/// then the next stretch is revealed. POST /api/charts starts a run and returns a secret key;
-/// send it as X-Chart-Key afterwards.
+/// Up or Down: one real chart frozen at "now", viewable at every timeframe. Call Up or Down on the
+/// timeframe you're viewing, then the future is revealed. POST /api/charts starts a run and returns
+/// a secret key; send it as X-Chart-Key afterwards.
 /// </summary>
 public static class ChartEndpoints
 {
@@ -15,19 +15,19 @@ public static class ChartEndpoints
     public static IEndpointRouteBuilder MapChartEndpoints(this IEndpointRouteBuilder app)
     {
         var charts = app.MapGroup("/api/charts");
-        charts.MapGet("/timeframes", (ChartLibrary library) => library.Timeframes.Select(TimeframeView.From));
+        charts.MapGet("/timeframes", () => ChartLibrary.Timeframes.Select(t => new TimeframeView(t.Id, t.Label)));
         charts.MapPost("/", Start);
-        charts.MapGet("/mine", Get);
+        charts.MapGet("/mine", View);
         charts.MapPost("/mine/next", Next);
         charts.MapPost("/mine/call", Call);
         return app;
     }
 
-    private static IResult Start(NewChartRequest request, ChartRunStore store)
+    private static IResult Start(TimeframeRequest request, ChartRunStore store)
     {
-        if (!TryTimeframe(store.Library, request.Timeframe, out var timeframe, out var invalid))
+        if (Timeframe.Find(request.Timeframe) is not { } timeframe)
         {
-            return invalid;
+            return InvalidTimeframe();
         }
 
         if (store.Start((ulong)Random.Shared.NextInt64()) is not { } started)
@@ -37,35 +37,46 @@ public static class ChartEndpoints
 
         var view = store.Use(started.Key, run =>
         {
-            run.Next(timeframe);
-            return ChartView.From(run);
+            run.Next();
+            return ChartView.From(run, timeframe);
         });
         return Results.Created("/api/charts/mine", new ChartStarted(started.Key, view!));
     }
 
-    private static IResult Get(HttpRequest http, ChartRunStore store)
+    /// <summary>The current chart at any timeframe. Looking never changes anything.</summary>
+    private static IResult View(string? timeframe, HttpRequest http, ChartRunStore store)
     {
-        var view = store.Use(http.Headers[KeyHeader].ToString(), ChartView.From);
+        if (Timeframe.Find(timeframe) is not { } tf)
+        {
+            return InvalidTimeframe();
+        }
+
+        var view = store.Use(http.Headers[KeyHeader].ToString(), run => ChartView.From(run, tf));
         return view is null ? Results.Unauthorized() : Results.Ok(view);
     }
 
-    private static IResult Next(NewChartRequest request, HttpRequest http, ChartRunStore store)
+    private static IResult Next(TimeframeRequest request, HttpRequest http, ChartRunStore store)
     {
-        if (!TryTimeframe(store.Library, request.Timeframe, out var timeframe, out var invalid))
+        if (Timeframe.Find(request.Timeframe) is not { } timeframe)
         {
-            return invalid;
+            return InvalidTimeframe();
         }
 
         var view = store.Use(http.Headers[KeyHeader].ToString(), run =>
         {
-            run.Next(timeframe);
-            return ChartView.From(run);
+            run.Next();
+            return ChartView.From(run, timeframe);
         });
         return view is null ? Results.Unauthorized() : Results.Ok(view);
     }
 
     private static IResult Call(CallRequest request, HttpRequest http, ChartRunStore store)
     {
+        if (Timeframe.Find(request.Timeframe) is not { } timeframe)
+        {
+            return InvalidTimeframe();
+        }
+
         if (!Enum.IsDefined(request.Direction))
         {
             return Results.ValidationProblem(new Dictionary<string, string[]>
@@ -82,8 +93,8 @@ public static class ChartEndpoints
                 return new CallOutcome(null);
             }
 
-            run.Call(request.Direction);
-            return new CallOutcome(ChartView.From(run));
+            run.Call(request.Direction, timeframe);
+            return new CallOutcome(ChartView.From(run, timeframe));
         });
 
         return outcome switch
@@ -94,34 +105,24 @@ public static class ChartEndpoints
         };
     }
 
-    private static bool TryTimeframe(ChartLibrary library, string? id, out Timeframe timeframe, out IResult invalid)
+    private static IResult InvalidTimeframe() => Results.ValidationProblem(new Dictionary<string, string[]>
     {
-        timeframe = library.Timeframes.FirstOrDefault(t => t.Id == id)!;
-        invalid = Results.ValidationProblem(new Dictionary<string, string[]>
-        {
-            ["Timeframe"] = [$"Choose one of: {string.Join(", ", library.Timeframes.Select(t => t.Id))}."],
-        });
-        return timeframe is not null;
-    }
+        ["Timeframe"] = [$"Choose one of: {string.Join(", ", ChartLibrary.Timeframes.Select(t => t.Id))}."],
+    });
 
     /// <summary>View is null when the chart was already called.</summary>
     private sealed record CallOutcome(ChartView? View);
 }
 
-public sealed record NewChartRequest(string? Timeframe);
+public sealed record TimeframeRequest(string? Timeframe);
 
-public sealed record CallRequest(Direction Direction);
+public sealed record CallRequest(Direction Direction, string? Timeframe);
 
 public sealed record ChartStarted(string Key, ChartView Chart);
 
-/// <summary>A timeframe the page can offer, and what kind of market it shows.</summary>
-public sealed record TimeframeView(string Id, string Label, string Market)
-{
-    public static TimeframeView From(Timeframe timeframe) =>
-        new(timeframe.Id, timeframe.Label, timeframe == Timeframe.W1 ? "Forex" : "Crypto");
-}
+public sealed record TimeframeView(string Id, string Label);
 
-/// <summary>A candle as players see it: rebased to an index, with no time.</summary>
+/// <summary>A candle as players see it: rebased so "now" is 100.00, with no time.</summary>
 public sealed record CandleView(long Open, long High, long Low, long Close)
 {
     public static CandleView From(ChartRound round, Candle candle)
@@ -136,15 +137,17 @@ public sealed record RunStats(int Right, int Wrong, int Flat, int Streak, int Be
     public static RunStats From(ChartRun run) => new(run.Right, run.Wrong, run.Flat, run.Streak, run.BestStreak);
 }
 
-public sealed record CallView(Direction Call, Direction? Actual, bool? Correct, decimal ChangePercent)
+/// <summary>The call, including the timeframe it was made on (which sets how far ahead it looked).</summary>
+public sealed record CallView(string Timeframe, Direction Call, Direction? Actual, bool? Correct, decimal ChangePercent)
 {
-    public static CallView From(CallResult result) => new(result.Call, result.Actual, result.Correct, result.ChangePercent);
+    public static CallView From(CallResult result) =>
+        new(result.Timeframe.Id, result.Call, result.Actual, result.Correct, result.ChangePercent);
 }
 
 /// <summary>
-/// Everything the page needs. Before the call it holds only the history, as an index with no times;
-/// <see cref="Result"/> and <see cref="Reveal"/> stay null, so the market, the dates and the future
-/// can't be read from the network traffic.
+/// The current chart at one timeframe. Before the call it holds only the history, as an index with
+/// no times; <see cref="Result"/> and <see cref="Reveal"/> stay null, so the market, the dates and
+/// the future can't be read from the network traffic.
 /// </summary>
 public sealed record ChartView(
     string Timeframe,
@@ -155,44 +158,38 @@ public sealed record ChartView(
     ChartReveal? Reveal,
     RunStats Stats)
 {
-    public static ChartView From(ChartRun run)
+    public static ChartView From(ChartRun run, Timeframe timeframe)
     {
         var round = run.Current ?? throw new InvalidOperationException("Deal a chart first.");
         return new ChartView(
-            round.Timeframe.Id,
-            ChartRound.HistoryCandles,
-            ChartRound.Horizon,
-            round.Visible.Select(c => CandleView.From(round, c)).ToList(),
+            timeframe.Id,
+            ChartMoment.HistoryCandles,
+            ChartMoment.FutureCandles,
+            round.Visible(timeframe).Select(c => CandleView.From(round, c)).ToList(),
             round.Result is { } result ? CallView.From(result) : null,
-            round.IsCalled ? ChartReveal.From(round) : null,
+            round.Result is { } called ? ChartReveal.From(round.Moment, called) : null,
             RunStats.From(run));
     }
 }
 
-/// <summary>The answer: which market and when, with the real prices at the call and at the end.</summary>
+/// <summary>The answer: which market and when, with the real prices at "now" and when the call was decided.</summary>
 public sealed record ChartReveal(
     string Symbol,
     string Name,
-    DateTimeOffset CallTime,
-    DateTimeOffset EndTime,
-    string CallPrice,
+    DateTimeOffset Now,
+    DateTimeOffset DecidedAt,
+    string PriceNow,
     string EndPrice)
 {
-    public static ChartReveal From(ChartRound round)
-    {
-        var candles = round.Visible;
-        var result = round.Result ?? throw new InvalidOperationException("Not called yet.");
-        var decimals = round.Series.Decimals;
-        return new ChartReveal(
-            round.Series.Symbol,
-            round.Series.Name,
-            candles[ChartRound.HistoryCandles - 1].OpenTime + round.Timeframe.Length,
-            candles[^1].OpenTime + round.Timeframe.Length,
-            Format(result.DecisionClose, decimals),
-            Format(result.EndClose, decimals));
-    }
+    public static ChartReveal From(ChartMoment moment, CallResult result) => new(
+        moment.Symbol,
+        moment.Name,
+        moment.Now,
+        moment.Now + result.Horizon,
+        Format(result.PriceNow, moment.Decimals),
+        Format(result.EndPrice, moment.Decimals));
 
-    /// <summary>Integer ticks back to a quote: 10850 with 4 decimals is "1.0850".</summary>
+    /// <summary>Integer ticks back to a quote: 6425017 with 2 decimals is "64,250.17".</summary>
     public static string Format(long ticks, int decimals) =>
         (ticks / (decimal)Math.Pow(10, decimals)).ToString($"N{decimals}", CultureInfo.InvariantCulture);
 }

@@ -4,102 +4,100 @@ using System.Text.Json.Serialization;
 namespace Tradeground.Game.Charts;
 
 /// <summary>
-/// The historical charts shipped inside this assembly, checked on load.
-/// Regenerate the data files with tools/Tradeground.ChartData.
+/// The chart moments shipped inside this assembly (Charts/crypto-moments.json), checked on load.
+/// Regenerate the file with tools/Tradeground.ChartData.
 /// </summary>
 public sealed class ChartLibrary
 {
-    public static readonly IReadOnlyList<string> ResourceNames =
-    [
-        "Tradeground.Game.Charts.fx-weekly.json",
-        "Tradeground.Game.Charts.crypto-intraday.json",
-    ];
+    public const string ResourceName = "Tradeground.Game.Charts.crypto-moments.json";
 
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new CandleArrayConverter() },
     };
 
-    public ChartLibrary(IEnumerable<ChartDataset> datasets, int minimumSegmentLength)
+    public ChartLibrary(MomentDataset dataset)
     {
-        ArgumentNullException.ThrowIfNull(datasets);
-        var all = datasets.ToList();
-        foreach (var series in all.SelectMany(d => d.Series))
+        ArgumentNullException.ThrowIfNull(dataset);
+        if (dataset.Moments.Count == 0)
         {
-            Validate(series, minimumSegmentLength);
+            throw new InvalidOperationException("The chart library has no moments.");
         }
 
-        Sources = all.Select(d => d.Source).ToList();
-        Series = all.SelectMany(d => d.Series).ToList();
-        Timeframes = Timeframe.All.Where(t => Series.Any(s => s.Timeframe == t.Id)).ToList();
-    }
-
-    public IReadOnlyList<string> Sources { get; }
-
-    public IReadOnlyList<ChartSeries> Series { get; }
-
-    /// <summary>Timeframes that have at least one market, shortest first.</summary>
-    public IReadOnlyList<Timeframe> Timeframes { get; }
-
-    public IReadOnlyList<ChartSeries> SeriesFor(Timeframe timeframe) =>
-        Series.Where(s => s.Timeframe == timeframe.Id).ToList();
-
-    public static ChartLibrary LoadBuiltIn(int minimumSegmentLength = ChartRound.TotalCandles)
-    {
-        var assembly = typeof(ChartLibrary).Assembly;
-        var datasets = ResourceNames.Select(name =>
+        foreach (var moment in dataset.Moments)
         {
-            using var stream = assembly.GetManifestResourceStream(name)
-                ?? throw new InvalidOperationException($"Missing resource {name}.");
-            return JsonSerializer.Deserialize<ChartDataset>(stream, JsonOptions)
-                ?? throw new InvalidOperationException($"Resource {name} is empty.");
-        });
-        return new ChartLibrary(datasets, minimumSegmentLength);
-    }
-
-    /// <summary>Bad data should stop the app at startup, not surprise a player mid-game.</summary>
-    private static void Validate(ChartSeries series, int minimumSegmentLength)
-    {
-        var where = $"{series.Symbol} {series.Timeframe}";
-        if (Timeframe.Find(series.Timeframe) is null)
-        {
-            throw new InvalidOperationException($"{where}: unknown timeframe.");
+            Validate(moment);
         }
 
-        if (series.Decimals is < 0 or > 8)
+        Source = dataset.Source;
+        Moments = dataset.Moments;
+    }
+
+    public string Source { get; }
+
+    public IReadOnlyList<ChartMoment> Moments { get; }
+
+    public static IReadOnlyList<Timeframe> Timeframes => Timeframe.Intraday;
+
+    public static ChartLibrary LoadBuiltIn()
+    {
+        using var stream = typeof(ChartLibrary).Assembly.GetManifestResourceStream(ResourceName)
+            ?? throw new InvalidOperationException($"Missing resource {ResourceName}.");
+        var dataset = JsonSerializer.Deserialize<MomentDataset>(stream, JsonOptions)
+            ?? throw new InvalidOperationException($"Resource {ResourceName} is empty.");
+        return new ChartLibrary(dataset);
+    }
+
+    /// <summary>
+    /// Bad data should stop the app at startup, not surprise a player mid-game. Every frame must be
+    /// complete, evenly spaced, valid, and line up on the same "now" with the same price.
+    /// </summary>
+    public static void Validate(ChartMoment moment)
+    {
+        ArgumentNullException.ThrowIfNull(moment);
+        var where = $"{moment.Symbol} at {moment.Now:u}";
+
+        if (moment.Decimals is < 0 or > 8)
         {
             throw new InvalidOperationException($"{where}: decimals must be between 0 and 8.");
         }
 
-        if (series.Segments.Count == 0)
+        foreach (var timeframe in Timeframe.Intraday)
         {
-            throw new InvalidOperationException($"{where}: has no candles.");
-        }
-
-        foreach (var segment in series.Segments)
-        {
-            if (segment.Count < minimumSegmentLength)
+            if (!moment.Frames.TryGetValue(timeframe.Id, out var candles))
             {
-                throw new InvalidOperationException($"{where}: every segment needs at least {minimumSegmentLength} candles.");
+                throw new InvalidOperationException($"{where}: missing the {timeframe.Id} frame.");
             }
 
-            for (var i = 0; i < segment.Count; i++)
+            if (candles.Count != ChartMoment.CandlesPerFrame)
             {
-                if (!segment[i].IsValid)
+                throw new InvalidOperationException($"{where} {timeframe.Id}: needs exactly {ChartMoment.CandlesPerFrame} candles.");
+            }
+
+            for (var i = 0; i < candles.Count; i++)
+            {
+                if (!candles[i].IsValid)
                 {
-                    throw new InvalidOperationException($"{where}: candle at {segment[i].OpenTime:u} has impossible prices.");
+                    throw new InvalidOperationException($"{where} {timeframe.Id}: candle {i} has impossible prices.");
                 }
 
-                if (i > 0 && segment[i].OpenTime <= segment[i - 1].OpenTime)
+                // The history ends exactly at "now"; every candle is one timeframe after the previous one.
+                var expected = moment.Now + (timeframe.Length * (i - ChartMoment.HistoryCandles));
+                if (candles[i].OpenTime != expected)
                 {
-                    throw new InvalidOperationException($"{where}: candles are out of order at {segment[i].OpenTime:u}.");
+                    throw new InvalidOperationException($"{where} {timeframe.Id}: candle {i} opens at {candles[i].OpenTime:u}, expected {expected:u}.");
                 }
+            }
+
+            if (candles[ChartMoment.HistoryCandles - 1].Close != moment.PriceNow)
+            {
+                throw new InvalidOperationException($"{where} {timeframe.Id}: the price at \"now\" differs from the 1m chart.");
             }
         }
     }
 }
 
-public sealed record ChartDataset(string Source, IReadOnlyList<ChartSeries> Series);
+public sealed record MomentDataset(string Source, IReadOnlyList<ChartMoment> Moments);
 
 /// <summary>Stores a candle as [unixSeconds, open, high, low, close]: about a third of the size of an object.</summary>
 public sealed class CandleArrayConverter : JsonConverter<Candle>

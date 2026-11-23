@@ -71,7 +71,7 @@ export async function renderHome(root) {
           level: "Easy",
           time: "About 1 minute a chart, on your own",
           teaches: "reading price charts",
-          body: "A real crypto or currency chart from the past, stopped at \"now\". Guess whether the price goes up or down next, then watch what actually happened.",
+          body: "A real crypto chart from the past, stopped at \"now\". Zoom in and out from 1-minute to 4-hour candles, guess whether the price goes up or down next, then watch what actually happened.",
           actions: `<a class="button" href="#/chart">Play</a>${howToButton("up-or-down")}`,
         })}
         ${gameRow({
