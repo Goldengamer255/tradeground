@@ -57,4 +57,9 @@ window.tradeground = {
   scrollIntoView(element) {
     element?.scrollIntoView({ behavior: "smooth", block: "start" });
   },
+
+  // After moving to another page, jump to the #section the link pointed at (Blazor doesn't).
+  scrollToId(id) {
+    document.getElementById(id)?.scrollIntoView({ block: "start" });
+  },
 };

@@ -689,7 +689,12 @@ input {
 .footnote {
   color: var(--muted);
   font-size: var(--step--1);
-  max-width: 44em;
+}
+
+/* Sections the top bar links to: leave a little space above them after the jump. */
+.game,
+.join-card {
+  scroll-margin-top: 1.5rem;
 }
 
 /* ---------- Candle charts (SVG with HTML axis labels) ---------- */

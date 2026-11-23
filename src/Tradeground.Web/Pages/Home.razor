@@ -3,6 +3,8 @@
 @inject Seats Seats
 @inject HowTo HowTo
 @inject NavigationManager Nav
+@inject IJSRuntime JS
+@implements IDisposable
 
 <PageTitle>Tradeground: learn to trade by playing</PageTitle>
 
@@ -59,7 +61,7 @@
             </div>
         </article>
 
-        <article class="game game-sun" aria-labelledby="g-history">
+        <article class="game game-sun" id="trade-history" aria-labelledby="g-history">
             <div class="game-art" aria-hidden="true">
                 <svg viewBox="0 0 170 90">
                     <polyline class="art-ink-line" points="8,70 30,58 48,64 70,40 90,48 112,24 134,30 160,12" />
@@ -76,7 +78,7 @@
             <span class="soon">Coming soon</span>
         </article>
 
-        <article class="game game-lilac" aria-labelledby="g-maker">
+        <article class="game game-lilac" id="market-maker" aria-labelledby="g-maker">
             <div class="game-art" aria-hidden="true">
                 <svg viewBox="0 0 170 90">
                     <rect class="art-die" x="22" y="18" width="56" height="56" rx="13" />
@@ -144,6 +146,7 @@
 
     protected override async Task OnInitializedAsync()
     {
+        Nav.LocationChanged += OnLocationChanged;
         var result = await Api.GetModes();
         // Kids' version first.
         modes = (result.Data ?? []).OrderBy(m => m.Audience == Audience.Explorer ? 0 : 1).ToArray();
@@ -152,6 +155,31 @@
             hostError = result.Error;
         }
     }
+
+    /// <summary>
+    /// The top bar links to sections of this page (#market-maker, #join). Coming from another page,
+    /// Blazor shows the page but doesn't jump to the section, so do it once the page has rendered.
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await ScrollToFragment();
+        }
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e) => _ = InvokeAsync(ScrollToFragment);
+
+    private async Task ScrollToFragment()
+    {
+        var fragment = new Uri(Nav.Uri).Fragment.TrimStart('#');
+        if (fragment.Length > 0)
+        {
+            await JS.InvokeVoidAsync("tradeground.scrollToId", fragment);
+        }
+    }
+
+    public void Dispose() => Nav.LocationChanged -= OnLocationChanged;
 
     /// <summary>Room codes are capitals and digits only; tidy what's typed as it's typed.</summary>
     private void CodeChanged(ChangeEventArgs e)
