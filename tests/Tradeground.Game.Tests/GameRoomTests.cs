@@ -66,12 +66,57 @@ public sealed class GameRoomTests
     }
 
     [Fact]
+    public void Settlement_cancels_resting_orders_and_reveals_every_die()
+    {
+        _room.Submit(OrderRequest.Limit("alice", Side.Sell, price: 36, quantity: 5));
+        _room.Submit(OrderRequest.Limit("bob", Side.Buy, price: 30, quantity: 5));
+
+        var settlement = _room.Settle();
+
+        _room.Snapshot().Bids.ShouldBeEmpty("the contract expired, so nothing is left to trade");
+        _room.Snapshot().Asks.ShouldBeEmpty();
+        _room.OpenOrdersFor("alice").ShouldBeEmpty();
+        settlement.Dice.Count.ShouldBe(10);
+        settlement.Dice.Sum().ShouldBe((int)settlement.TrueValue, "trader-dice is worth 1 per pip");
+    }
+
+    [Fact]
     public void No_trading_after_settlement()
     {
         _room.Settle();
 
         _room.Submit(OrderRequest.Limit("alice", Side.Buy, price: 30, quantity: 1)).Status.ShouldBe(OrderStatus.Rejected);
         _room.Phase.ShouldBe(RoomPhase.Settled);
+    }
+
+    [Fact]
+    public void Open_orders_show_what_is_still_resting_after_partial_fills()
+    {
+        var resting = _room.Submit(OrderRequest.Limit("alice", Side.Sell, price: 36, quantity: 10));
+        _room.Submit(OrderRequest.Market("bob", Side.Buy, quantity: 4));
+
+        var open = _room.OpenOrdersFor("alice").ShouldHaveSingleItem();
+
+        (open.Id, open.Price, open.Remaining).ShouldBe((resting.OrderId, 36L, 6L));
+        _room.OpenOrdersFor("bob").ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void The_tape_records_every_trade_in_order()
+    {
+        _room.Submit(OrderRequest.Limit("alice", Side.Sell, price: 36, quantity: 1));
+        _room.Submit(OrderRequest.Limit("alice", Side.Sell, price: 37, quantity: 1));
+        _room.Submit(OrderRequest.Market("bob", Side.Buy, quantity: 2));
+
+        _room.Tape.Select(t => t.Price).ShouldBe(new[] { 36L, 37L });
+    }
+
+    [Fact]
+    public void Display_names_are_unique_within_a_room()
+    {
+        Should.Throw<InvalidOperationException>(() => _room.Join("carol", "Alice"));
+        _room.IsNameTaken("Alice").ShouldBeTrue();
+        _room.IsPlayer("carol").ShouldBeFalse("a failed join must not leave a half-created player");
     }
 
     [Fact]

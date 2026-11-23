@@ -37,6 +37,12 @@ public sealed class HiddenValueRound
 
     public long TrueValue => _dice.Sum() * _spec.ValuePerPip;
 
+    /// <summary>
+    /// Every die, in order. A copy, so callers can't change the round. Only the game room decides
+    /// when this is safe to show (after settlement).
+    /// </summary>
+    public IReadOnlyList<int> Dice => [.. _dice];
+
     /// <summary>What a player who knows nothing should expect the asset to be worth.</summary>
     public decimal ExpectedValueWithNoInformation => _spec.DiceCount * (_spec.DiceSides + 1) / 2m * _spec.ValuePerPip;
 

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A free trading game. Real order book, hidden dice, no real money.">
+  <title>Tradeground</title>
+  <link rel="preload" href="/lib/fonts/bricolage-grotesque-wght.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/lib/fonts/ibm-plex-sans-wght.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/app.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='3' width='26' height='26' rx='7' fill='%23F6C744'/%3E%3Ccircle cx='11' cy='11' r='3' fill='%2318202F'/%3E%3Ccircle cx='21' cy='21' r='3' fill='%2318202F'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar">
+    <a class="wordmark" href="#/">Tradeground</a>
+    <div class="topbar-room" id="topbar-room"></div>
+  </header>
+  <main id="app" tabindex="-1"></main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="/lib/signalr/signalr.min.js"></script>
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

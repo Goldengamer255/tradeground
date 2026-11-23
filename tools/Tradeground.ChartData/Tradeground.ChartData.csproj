@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Builds src/Tradeground.Game/Charts/fx-weekly.json from Federal Reserve H.10 daily rates. See Program.cs. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Tradeground.Game\Tradeground.Game.csproj" />
+  </ItemGroup>
+</Project>

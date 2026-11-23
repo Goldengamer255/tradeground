@@ -15,6 +15,12 @@ public static class RoomEndpoints
     public const string TraderKeyHeader = "X-Trader-Key";
     public const string HostKeyHeader = "X-Host-Key";
 
+    /// <summary>A classroom is ~30; the cap stops one room from growing without limit.</summary>
+    public const int MaxPlayersPerRoom = 100;
+
+    /// <summary>How much of the trade tape a late joiner gets.</summary>
+    private const int RecentTradeCount = 50;
+
     public static IEndpointRouteBuilder MapRoomEndpoints(this IEndpointRouteBuilder app)
     {
         var api = app.MapGroup("/api");
@@ -23,6 +29,7 @@ public static class RoomEndpoints
 
         var rooms = api.MapGroup("/rooms");
         rooms.MapPost("/", CreateRoom);
+        rooms.MapGet("/{code}", GetRoom);
         rooms.MapPost("/{code}/players", JoinRoom);
         rooms.MapGet("/{code}/book", GetBook);
         rooms.MapGet("/{code}/me", GetAccount);
@@ -49,7 +56,24 @@ public static class RoomEndpoints
         return Results.Created($"/api/rooms/{room.Code}", new CreateRoomResponse(room.Code, room.HostKey, mode.Id));
     }
 
-    private static async Task<IResult> JoinRoom(string code, RoomRegistry registry)
+    private static async Task<IResult> GetRoom(string code, RoomRegistry registry)
+    {
+        if (!registry.TryGet(code, out var room))
+        {
+            return Results.NotFound();
+        }
+
+        return Results.Ok(await room.Ask(r => new RoomView(
+            room.Code,
+            ModeSummary.From(r.Mode),
+            r.Phase,
+            r.Players.Count,
+            r.PublicClues.Select(ClueView.From).ToList(),
+            r.Tape.TakeLast(RecentTradeCount).Select(PublicTrade.From).ToList(),
+            r.Settlement)));
+    }
+
+    private static async Task<IResult> JoinRoom(string code, RoomRegistry registry, IHubContext<MarketHub> hub)
     {
         if (!registry.TryGet(code, out var room))
         {
@@ -57,17 +81,43 @@ public static class RoomEndpoints
         }
 
         var traderKey = Secrets.NewToken();
-        var displayName = NameGenerator.Next();
-        var player = await room.Ask(r => r.Phase == RoomPhase.Trading ? r.Join(traderKey, displayName) : null);
-        if (player is null)
+
+        // The name is picked INSIDE the room's worker, so checking "is it taken?" and joining
+        // happen as one step. Two players joining at the same moment can't both get the same name.
+        var joined = await room.Ask(r =>
         {
-            return Results.Conflict("The round is over.");
+            if (r.Phase != RoomPhase.Trading)
+            {
+                return new JoinOutcome(null, "The round is over.", 0);
+            }
+
+            if (r.Players.Count >= MaxPlayersPerRoom)
+            {
+                return new JoinOutcome(null, "The room is full.", 0);
+            }
+
+            string name;
+            do
+            {
+                name = NameGenerator.Next();
+            }
+            while (r.IsNameTaken(name));
+
+            var joinedPlayer = r.Join(traderKey, name);
+            return new JoinOutcome(joinedPlayer, null, r.Players.Count);
+        });
+
+        if (joined.Player is not { } player)
+        {
+            return Results.Conflict(joined.Error);
         }
+
+        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync("playerJoined", joined.Count);
 
         return Results.Ok(new JoinRoomResponse(
             traderKey,
             player.DisplayName,
-            player.PrivateClue.Text,
+            ClueView.From(player.PrivateClue),
             room.Mode.StartingCash,
             room.Mode.MaxPosition));
     }
@@ -90,10 +140,25 @@ public static class RoomEndpoints
         }
 
         var traderKey = http.Headers[TraderKeyHeader].ToString();
-        var account = await room.Ask(r => r.IsPlayer(traderKey) ? r.Ledger.Get(traderKey) : null);
-        return account is null
-            ? Results.Unauthorized()
-            : Results.Ok(new AccountView(account.Cash, account.Position));
+        // Built inside the worker: the ledger and open orders are only safe to read there.
+        var view = await room.Ask(r =>
+        {
+            if (!r.IsPlayer(traderKey))
+            {
+                return null;
+            }
+
+            var player = r.GetPlayer(traderKey);
+            var account = r.Ledger.Get(traderKey);
+            return new AccountView(
+                player.DisplayName,
+                ClueView.From(player.PrivateClue),
+                account.Cash,
+                account.Position,
+                r.OpenOrdersFor(traderKey).Select(OpenOrderView.From).ToList());
+        });
+
+        return view is null ? Results.Unauthorized() : Results.Ok(view);
     }
 
     private static async Task<IResult> PlaceOrder(
@@ -128,7 +193,7 @@ public static class RoomEndpoints
             await group.SendAsync("bookUpdated", o.Snapshot);
             if (o.Result.Trades.Count > 0)
             {
-                var tape = o.Result.Trades.Select(t => new PublicTrade(t.Sequence, t.Price, t.Quantity, t.AggressorSide)).ToList();
+                var tape = o.Result.Trades.Select(PublicTrade.From).ToList();
                 await group.SendAsync("tradesExecuted", tape);
             }
         }
@@ -193,8 +258,9 @@ public static class RoomEndpoints
             return Results.Conflict("No more clues to reveal.");
         }
 
-        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync("clueRevealed", clue.Text);
-        return Results.Ok(clue.Text);
+        var view = ClueView.From(clue);
+        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync("clueRevealed", view);
+        return Results.Ok(view);
     }
 
     private static async Task<IResult> Settle(string code, HttpRequest http, RoomRegistry registry, IHubContext<MarketHub> hub)
@@ -209,8 +275,12 @@ public static class RoomEndpoints
             return Results.Unauthorized();
         }
 
-        var settlement = await room.Ask(r => r.Settle());
-        await hub.Clients.Group(MarketHub.GroupFor(room.Code)).SendAsync("roundSettled", settlement);
+        var (settlement, snapshot) = await room.Ask(r => (r.Settle(), r.Snapshot()));
+        var group = hub.Clients.Group(MarketHub.GroupFor(room.Code));
+        await group.SendAsync("roundSettled", settlement);
+        await group.SendAsync("bookUpdated", snapshot);
         return Results.Ok(settlement);
     }
+
+    private sealed record JoinOutcome(Player? Player, string? Error, int Count);
 }
