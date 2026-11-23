@@ -970,7 +970,6 @@ div.level {
 }
 
 .chart-stats {
-  grid-template-columns: repeat(2, auto);
   gap: 0.5rem 2rem;
 }
 
@@ -1050,83 +1049,111 @@ div.level {
   }
 }
 
-.predict {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.5rem;
+.tf-tabs {
+  justify-self: start;
+  grid-auto-columns: minmax(3.5rem, auto);
 }
 
-.predict button {
+.tf-tabs button {
+  padding: 0 0.9rem;
+}
+
+.tf-note {
+  font-size: 0.7rem;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.chart-stats {
+  grid-template-columns: repeat(3, auto);
+}
+
+.chart-stats small {
+  font-family: var(--font-ui);
+  font-size: var(--step--1);
+  font-weight: 500;
+  color: var(--muted);
+  margin-left: 0.35rem;
+}
+
+#chart .call-level {
+  stroke: var(--ink);
+  stroke-width: 1;
+  stroke-dasharray: 6 4;
+}
+
+.call-row {
   display: grid;
-  gap: 0.25rem;
-  justify-items: center;
-  min-height: 4.5rem;
-  padding: 0.6rem 0.4rem;
-  border: 2px solid var(--rule);
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.call {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-height: 4rem;
+  border: 0;
   border-radius: var(--radius-control);
-  background: var(--panel);
+  color: #fff;
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  font-weight: 750;
   cursor: pointer;
 }
 
-.predict button:hover:not(:disabled) {
-  border-color: var(--ink);
+.call-up {
+  background: var(--bid);
 }
 
-.predict button:disabled {
+.call-down {
+  background: var(--ask);
+}
+
+@media (prefers-color-scheme: dark) {
+  .call {
+    color: #10141f;
+  }
+}
+
+.call:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.call:disabled {
   opacity: 0.5;
   cursor: wait;
 }
 
-.predict-label {
-  font-weight: 700;
+.chart-verdict {
+  border-width: 2px;
 }
 
-.predict-odds {
-  font-size: var(--step--1);
-  color: var(--muted);
-  line-height: 1.3;
+.chart-verdict.up {
+  border-color: var(--good);
 }
 
-.predict .predict-strongbear,
-.predict .predict-bear {
-  border-color: color-mix(in srgb, var(--ask) 45%, var(--rule));
+.chart-verdict.down {
+  border-color: var(--bad);
 }
 
-.predict .predict-strongbear {
-  background: var(--ask-soft);
-}
-
-.predict .predict-strongbull,
-.predict .predict-bull {
-  border-color: color-mix(in srgb, var(--bid) 45%, var(--rule));
-}
-
-.predict .predict-strongbull {
-  background: var(--bid-soft);
-}
-
-.chart-feedback {
-  min-height: 1.5em;
-  font-weight: 600;
-}
-
-.how {
-  color: var(--muted);
-  max-width: 44em;
-}
-
-.how summary {
-  cursor: pointer;
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.how p {
-  margin-top: 0.5rem;
-}
-
-.chart-reveal h2 {
+.chart-verdict h2 {
   font-size: var(--step-2);
+}
+
+.chart-verdict p {
+  color: var(--muted);
+  max-width: 48em;
+}
+
+.chart-wait {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.keys-hint {
+  margin-top: -0.25rem;
 }
 
 /* ---------- Responsive ---------- */
@@ -1193,20 +1220,16 @@ div.level {
     display: none;
   }
 
-  .predict {
-    gap: 0.3rem;
+  .tf-tabs {
+    justify-self: stretch;
   }
 
-  .predict button {
-    padding: 0.5rem 0.15rem;
+  .tf-tabs button {
+    padding: 0 0.25rem;
   }
 
-  .predict-label {
-    font-size: var(--step--1);
-  }
-
-  .predict-odds {
-    font-size: 0.7rem;
+  .call {
+    min-height: 3.5rem;
   }
 }
 

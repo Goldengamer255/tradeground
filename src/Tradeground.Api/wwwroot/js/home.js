@@ -40,8 +40,8 @@ export async function renderHome(root) {
       <section class="solo" aria-labelledby="solo-h">
         <div>
           <h2 id="solo-h">Practise alone with Chart Replay</h2>
-          <p>Real currency charts from 2000 to today, with the dates hidden. Call each week bull or bear,
-            say how sure you are, and find out at the end which market it was.</p>
+          <p>Real crypto and currency charts, from 1-minute to weekly candles, with the market and dates
+            hidden. Call up or down, then watch what actually happened next.</p>
         </div>
         <a class="button" href="#/chart">Play Chart Replay</a>
       </section>

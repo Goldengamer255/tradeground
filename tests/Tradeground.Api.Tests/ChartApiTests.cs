@@ -17,99 +17,122 @@ public sealed class ChartApiTests(WebApplicationFactory<Program> factory) : ICla
     };
 
     [Fact]
-    public async Task A_new_chart_shows_history_as_an_index_and_nothing_else()
+    public async Task Lists_the_timeframes_with_their_market_type()
     {
         using var client = factory.CreateClient();
 
-        using var response = await client.PostAsync(new Uri("/api/charts", UriKind.Relative), content: null);
+        var timeframes = await client.GetFromJsonAsync<TimeframeView[]>("/api/charts/timeframes", Json);
+
+        timeframes.ShouldNotBeNull().Select(t => (t.Id, t.Market)).ShouldBe(new[]
+        {
+            ("1m", "Crypto"), ("15m", "Crypto"), ("30m", "Crypto"), ("1h", "Crypto"), ("4h", "Crypto"), ("1w", "Forex"),
+        });
+    }
+
+    [Theory]
+    [InlineData("1m")]
+    [InlineData("4h")]
+    [InlineData("1w")]
+    public async Task A_new_chart_shows_only_the_history_as_an_index(string timeframe)
+    {
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync("/api/charts", new NewChartRequest(timeframe), Json);
         var raw = await response.Content.ReadAsStringAsync();
         var started = JsonSerializer.Deserialize<ChartStarted>(raw, Json).ShouldNotBeNull();
 
         response.StatusCode.ShouldBe(HttpStatusCode.Created);
-        started.Chart.Candles.Count.ShouldBe(ChartSession.HistoryCandles);
-        started.Chart.Candles[0].Close.ShouldBe(ChartSession.IndexBase);
-        started.Chart.Reveal.ShouldBeNull();
+        started.Chart.Timeframe.ShouldBe(timeframe);
+        started.Chart.Candles.Count.ShouldBe(ChartRound.HistoryCandles);
+        started.Chart.Candles[0].Close.ShouldBe(ChartRound.IndexBase);
+        (started.Chart.Result, started.Chart.Reveal).ShouldBe((null, null));
 
-        // The answer must not be anywhere in the response: no pair, no dates, no real prices.
+        // The answer must not be anywhere in the response: no market, no dates, no real prices.
         raw.ShouldNotContain("USD");
-        raw.ShouldNotContain("week", Case.Insensitive);
-        Regex.IsMatch(raw, @"\d{4}-\d{2}-\d{2}").ShouldBeFalse("no dates until the end");
+        Regex.IsMatch(raw, @"\d{4}-\d{2}-\d{2}").ShouldBeFalse("no dates before the call");
     }
 
     [Fact]
-    public async Task Twenty_guesses_finish_the_game_and_reveal_the_market()
+    public async Task Calling_reveals_the_next_stretch_and_the_market()
     {
         using var client = factory.CreateClient();
-        var started = await StartAsync(client);
+        var started = await StartAsync(client, "15m");
 
-        GuessResponse? last = null;
-        for (var i = 0; i < ChartSession.Rounds; i++)
-        {
-            last = await GuessAsync(client, started.Key, (Prediction)(i % 5));
-        }
+        var chart = await CallAsync(client, started.Key, Direction.Up);
 
-        var chart = last.ShouldNotBeNull().Chart;
-        chart.RoundsPlayed.ShouldBe(ChartSession.Rounds);
-        chart.Candles.Count.ShouldBe(ChartSession.TotalCandles);
-        chart.Score.ShouldBe(chart.Guesses.Sum(g => g.Points));
+        chart.Candles.Count.ShouldBe(ChartRound.TotalCandles);
+        var result = chart.Result.ShouldNotBeNull();
+        result.Call.ShouldBe(Direction.Up);
+        result.Correct.ShouldBe(result.Actual is null ? null : result.Actual == Direction.Up);
         var reveal = chart.Reveal.ShouldNotBeNull();
-        reveal.Symbol.Length.ShouldBe(6);
-        (reveal.Right + reveal.Wrong + reveal.NotSure + reveal.Flat).ShouldBe(ChartSession.Rounds, "every round is counted exactly once");
-        reveal.NotSure.ShouldBe(4, "every fifth call was Not sure");
-        reveal.LastWeek.ShouldBeGreaterThan(reveal.FirstWeek);
+        reveal.Symbol.ShouldEndWith("/USDT");
+        (reveal.EndTime - reveal.CallTime).ShouldBe(TimeSpan.FromMinutes(15 * ChartRound.Horizon));
+        (chart.Stats.Right + chart.Stats.Wrong + chart.Stats.Flat).ShouldBe(1);
+    }
 
-        using var extra = await SendGuessAsync(client, started.Key, Prediction.Bull);
-        extra.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+    [Fact]
+    public async Task A_chart_can_be_called_only_once_and_the_next_one_starts_fresh()
+    {
+        using var client = factory.CreateClient();
+        var started = await StartAsync(client, "1h");
+        await CallAsync(client, started.Key, Direction.Down);
+
+        using var again = await SendAsync(client, "/api/charts/mine/call", started.Key, new CallRequest(Direction.Up));
+        again.StatusCode.ShouldBe(HttpStatusCode.Conflict);
+
+        using var next = await SendAsync(client, "/api/charts/mine/next", started.Key, new NewChartRequest("1w"));
+        var chart = (await next.Content.ReadFromJsonAsync<ChartView>(Json)).ShouldNotBeNull();
+        chart.Timeframe.ShouldBe("1w");
+        chart.Candles.Count.ShouldBe(ChartRound.HistoryCandles);
+        chart.Result.ShouldBeNull();
+        (chart.Stats.Right + chart.Stats.Wrong + chart.Stats.Flat).ShouldBe(1, "the run's tally carries over");
     }
 
     [Fact]
     public async Task A_refresh_picks_up_where_the_player_left_off()
     {
         using var client = factory.CreateClient();
-        var started = await StartAsync(client);
-        await GuessAsync(client, started.Key, Prediction.Unsure);
+        var started = await StartAsync(client, "30m");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri("/api/charts/mine", UriKind.Relative));
         request.Headers.Add(ChartEndpoints.KeyHeader, started.Key);
         using var response = await client.SendAsync(request);
         var chart = (await response.Content.ReadFromJsonAsync<ChartView>(Json)).ShouldNotBeNull();
 
-        chart.RoundsPlayed.ShouldBe(1);
-        chart.Candles.Count.ShouldBe(ChartSession.HistoryCandles + 1);
+        chart.Candles.ShouldBe(started.Chart.Candles);
     }
 
     [Fact]
-    public async Task Guesses_need_a_valid_key_and_a_valid_prediction()
+    public async Task Bad_requests_are_rejected_clearly()
     {
         using var client = factory.CreateClient();
-        var started = await StartAsync(client);
+        var started = await StartAsync(client, "4h");
 
-        using var noKey = await SendGuessAsync(client, "not-a-key", Prediction.Bull);
-        using var badPrediction = await SendRawAsync(client, started.Key, new { prediction = 42 });
+        using var badTimeframe = await client.PostAsJsonAsync("/api/charts", new NewChartRequest("2h"), Json);
+        using var noKey = await SendAsync(client, "/api/charts/mine/call", "not-a-key", new CallRequest(Direction.Up));
+        using var badDirection = await SendAsync(client, "/api/charts/mine/call", started.Key, new { direction = 7 });
 
+        badTimeframe.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
         noKey.StatusCode.ShouldBe(HttpStatusCode.Unauthorized);
-        badPrediction.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
+        badDirection.StatusCode.ShouldBe(HttpStatusCode.BadRequest);
     }
 
-    private static async Task<ChartStarted> StartAsync(HttpClient client)
+    private static async Task<ChartStarted> StartAsync(HttpClient client, string timeframe)
     {
-        using var response = await client.PostAsync(new Uri("/api/charts", UriKind.Relative), content: null);
+        using var response = await client.PostAsJsonAsync("/api/charts", new NewChartRequest(timeframe), Json);
         return (await response.Content.ReadFromJsonAsync<ChartStarted>(Json)).ShouldNotBeNull();
     }
 
-    private static async Task<GuessResponse> GuessAsync(HttpClient client, string key, Prediction prediction)
+    private static async Task<ChartView> CallAsync(HttpClient client, string key, Direction direction)
     {
-        using var response = await SendGuessAsync(client, key, prediction);
+        using var response = await SendAsync(client, "/api/charts/mine/call", key, new CallRequest(direction));
         response.StatusCode.ShouldBe(HttpStatusCode.OK);
-        return (await response.Content.ReadFromJsonAsync<GuessResponse>(Json)).ShouldNotBeNull();
+        return (await response.Content.ReadFromJsonAsync<ChartView>(Json)).ShouldNotBeNull();
     }
 
-    private static Task<HttpResponseMessage> SendGuessAsync(HttpClient client, string key, Prediction prediction) =>
-        SendRawAsync(client, key, new GuessRequest(prediction));
-
-    private static async Task<HttpResponseMessage> SendRawAsync(HttpClient client, string key, object body)
+    private static async Task<HttpResponseMessage> SendAsync(HttpClient client, string url, string key, object body)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri("/api/charts/mine/guesses", UriKind.Relative))
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(url, UriKind.Relative))
         {
             Content = JsonContent.Create(body, body.GetType(), options: Json),
         };

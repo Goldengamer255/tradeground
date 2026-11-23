@@ -1,71 +1,99 @@
-using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Tradeground.Game.Charts;
 
 /// <summary>
-/// The historical charts shipped inside this assembly (Charts/fx-weekly.json), checked on load.
-/// Regenerate the file with tools/Tradeground.ChartData.
+/// The historical charts shipped inside this assembly, checked on load.
+/// Regenerate the data files with tools/Tradeground.ChartData.
 /// </summary>
 public sealed class ChartLibrary
 {
-    public const string ResourceName = "Tradeground.Game.Charts.fx-weekly.json";
+    public static readonly IReadOnlyList<string> ResourceNames =
+    [
+        "Tradeground.Game.Charts.fx-weekly.json",
+        "Tradeground.Game.Charts.crypto-intraday.json",
+    ];
 
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         Converters = { new CandleArrayConverter() },
     };
 
-    public ChartLibrary(ChartDataset dataset, int minimumCandles)
+    public ChartLibrary(IEnumerable<ChartDataset> datasets, int minimumSegmentLength)
     {
-        ArgumentNullException.ThrowIfNull(dataset);
-        Source = dataset.Source;
-        foreach (var series in dataset.Series)
+        ArgumentNullException.ThrowIfNull(datasets);
+        var all = datasets.ToList();
+        foreach (var series in all.SelectMany(d => d.Series))
         {
-            Validate(series, minimumCandles);
+            Validate(series, minimumSegmentLength);
         }
 
-        Series = dataset.Series;
+        Sources = all.Select(d => d.Source).ToList();
+        Series = all.SelectMany(d => d.Series).ToList();
+        Timeframes = Timeframe.All.Where(t => Series.Any(s => s.Timeframe == t.Id)).ToList();
     }
 
-    public string Source { get; }
+    public IReadOnlyList<string> Sources { get; }
 
     public IReadOnlyList<ChartSeries> Series { get; }
 
-    public static ChartLibrary LoadBuiltIn(int minimumCandles = ChartSession.TotalCandles)
+    /// <summary>Timeframes that have at least one market, shortest first.</summary>
+    public IReadOnlyList<Timeframe> Timeframes { get; }
+
+    public IReadOnlyList<ChartSeries> SeriesFor(Timeframe timeframe) =>
+        Series.Where(s => s.Timeframe == timeframe.Id).ToList();
+
+    public static ChartLibrary LoadBuiltIn(int minimumSegmentLength = ChartRound.TotalCandles)
     {
-        using var stream = typeof(ChartLibrary).Assembly.GetManifestResourceStream(ResourceName)
-            ?? throw new InvalidOperationException($"Missing resource {ResourceName}.");
-        var dataset = JsonSerializer.Deserialize<ChartDataset>(stream, JsonOptions)
-            ?? throw new InvalidOperationException($"Resource {ResourceName} is empty.");
-        return new ChartLibrary(dataset, minimumCandles);
+        var assembly = typeof(ChartLibrary).Assembly;
+        var datasets = ResourceNames.Select(name =>
+        {
+            using var stream = assembly.GetManifestResourceStream(name)
+                ?? throw new InvalidOperationException($"Missing resource {name}.");
+            return JsonSerializer.Deserialize<ChartDataset>(stream, JsonOptions)
+                ?? throw new InvalidOperationException($"Resource {name} is empty.");
+        });
+        return new ChartLibrary(datasets, minimumSegmentLength);
     }
 
     /// <summary>Bad data should stop the app at startup, not surprise a player mid-game.</summary>
-    private static void Validate(ChartSeries series, int minimumCandles)
+    private static void Validate(ChartSeries series, int minimumSegmentLength)
     {
+        var where = $"{series.Symbol} {series.Timeframe}";
+        if (Timeframe.Find(series.Timeframe) is null)
+        {
+            throw new InvalidOperationException($"{where}: unknown timeframe.");
+        }
+
         if (series.Decimals is < 0 or > 8)
         {
-            throw new InvalidOperationException($"{series.Symbol}: decimals must be between 0 and 8.");
+            throw new InvalidOperationException($"{where}: decimals must be between 0 and 8.");
         }
 
-        if (series.Candles.Count < minimumCandles)
+        if (series.Segments.Count == 0)
         {
-            throw new InvalidOperationException($"{series.Symbol}: needs at least {minimumCandles} candles.");
+            throw new InvalidOperationException($"{where}: has no candles.");
         }
 
-        for (var i = 0; i < series.Candles.Count; i++)
+        foreach (var segment in series.Segments)
         {
-            var candle = series.Candles[i];
-            if (!candle.IsValid)
+            if (segment.Count < minimumSegmentLength)
             {
-                throw new InvalidOperationException($"{series.Symbol}: candle for {candle.WeekStart} has impossible prices.");
+                throw new InvalidOperationException($"{where}: every segment needs at least {minimumSegmentLength} candles.");
             }
 
-            if (i > 0 && candle.WeekStart <= series.Candles[i - 1].WeekStart)
+            for (var i = 0; i < segment.Count; i++)
             {
-                throw new InvalidOperationException($"{series.Symbol}: candles are out of order at {candle.WeekStart}.");
+                if (!segment[i].IsValid)
+                {
+                    throw new InvalidOperationException($"{where}: candle at {segment[i].OpenTime:u} has impossible prices.");
+                }
+
+                if (i > 0 && segment[i].OpenTime <= segment[i - 1].OpenTime)
+                {
+                    throw new InvalidOperationException($"{where}: candles are out of order at {segment[i].OpenTime:u}.");
+                }
             }
         }
     }
@@ -73,7 +101,7 @@ public sealed class ChartLibrary
 
 public sealed record ChartDataset(string Source, IReadOnlyList<ChartSeries> Series);
 
-/// <summary>Stores a candle as ["2024-01-01", open, high, low, close]: about a third of the size of an object.</summary>
+/// <summary>Stores a candle as [unixSeconds, open, high, low, close]: about a third of the size of an object.</summary>
 public sealed class CandleArrayConverter : JsonConverter<Candle>
 {
     public override Candle Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -83,13 +111,11 @@ public sealed class CandleArrayConverter : JsonConverter<Candle>
             throw new JsonException("A candle must be an array.");
         }
 
-        reader.Read();
-        var week = DateOnly.ParseExact(reader.GetString() ?? string.Empty, "yyyy-MM-dd", CultureInfo.InvariantCulture);
-        var prices = new long[4];
-        for (var i = 0; i < prices.Length; i++)
+        var values = new long[5];
+        for (var i = 0; i < values.Length; i++)
         {
             reader.Read();
-            prices[i] = reader.GetInt64();
+            values[i] = reader.GetInt64();
         }
 
         reader.Read();
@@ -98,14 +124,14 @@ public sealed class CandleArrayConverter : JsonConverter<Candle>
             throw new JsonException("A candle has exactly five values.");
         }
 
-        return new Candle(week, prices[0], prices[1], prices[2], prices[3]);
+        return new Candle(DateTimeOffset.FromUnixTimeSeconds(values[0]), values[1], values[2], values[3], values[4]);
     }
 
     public override void Write(Utf8JsonWriter writer, Candle value, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(writer);
         writer.WriteStartArray();
-        writer.WriteStringValue(value.WeekStart.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        writer.WriteNumberValue(value.OpenTime.ToUnixTimeSeconds());
         writer.WriteNumberValue(value.Open);
         writer.WriteNumberValue(value.High);
         writer.WriteNumberValue(value.Low);

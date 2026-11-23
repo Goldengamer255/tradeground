@@ -1,38 +1,52 @@
-// Chart Replay: a solo game on a real currency chart. Guess whether next week closes higher,
-// and how sure you are. The server holds the future; this page only ever sees revealed weeks.
+// Chart Replay: a real chart, cut off at "now". Call Up or Down once, then watch the next stretch
+// replay and find out which market and when it was. The server holds the future; this page only
+// receives it after the call.
 
 import * as api from "./api.js";
-import { esc, fmt, notice, setTopbar, signed, trend } from "./ui.js";
+import { esc, notice, setTopbar } from "./ui.js";
 
 const KEY = "tradeground.chart";
+const TIMEFRAME = "tradeground.chart.timeframe";
+const REPLAY_MS = 70;
 
-// Each choice is a stated chance that the price goes UP. Points mirror the server's scoring rule.
-const CHOICES = [
-  { id: "StrongBear", label: "Strong bear", chance: 10, key: "1" },
-  { id: "Bear", label: "Bear", chance: 30, key: "2" },
-  { id: "Unsure", label: "Not sure", chance: 50, key: "3" },
-  { id: "Bull", label: "Bull", chance: 70, key: "4" },
-  { id: "StrongBull", label: "Strong bull", chance: 90, key: "5" },
-];
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-const pointsIf = (chance, up) => 100 - ((chance - (up ? 100 : 0)) ** 2) / 25;
-const labelOf = (id) => CHOICES.find((c) => c.id === id)?.label ?? id;
-
-function loadKey() {
+function load(name) {
   try {
-    return sessionStorage.getItem(KEY);
+    return sessionStorage.getItem(name);
   } catch {
     return null;
   }
 }
 
-function saveKey(key) {
+function save(name, value) {
   try {
-    if (key) sessionStorage.setItem(KEY, key);
-    else sessionStorage.removeItem(KEY);
+    if (value) sessionStorage.setItem(name, value);
+    else sessionStorage.removeItem(name);
   } catch {
     // Storage blocked: the game still works until the page is refreshed.
   }
+}
+
+/** 20 candles of 15 minutes -> "5 hours". */
+function duration(timeframe, candles) {
+  const minutes = { "1m": 1, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1w": 10080 }[timeframe] * candles;
+  if (minutes % 10080 === 0) return plural(minutes / 10080, "week");
+  if (minutes < 60) return plural(minutes, "minute");
+  const hours = minutes / 60;
+  if (hours < 48) return plural(hours, "hour");
+  const days = Math.floor(hours / 24);
+  const rest = hours % 24;
+  return rest ? `${plural(days, "day")} and ${plural(rest, "hour")}` : plural(days, "day");
+}
+
+const plural = (n, word) => `${n} ${n === 1 ? word : `${word}s`}`;
+
+function when(iso, timeframe) {
+  const options = timeframe === "1w"
+    ? { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }
+    : { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", hourCycle: "h23" };
+  return new Date(iso).toLocaleString("en-GB", options) + (timeframe === "1w" ? "" : " UTC");
 }
 
 export async function openChart(root) {
@@ -45,118 +59,142 @@ export async function openChart(root) {
 class ChartGame {
   constructor(root) {
     this.root = root;
-    this.key = loadKey();
+    this.key = load(KEY);
     this.chart = null;
+    this.shown = 0; // How many candles are drawn: grows during the replay.
     this.busy = false;
     this.onKey = (event) => this.handleKey(event);
   }
 
   async load() {
+    const timeframes = await api.getTimeframes();
+    if (!timeframes.ok) {
+      this.root.innerHTML = notice("Couldn't load Chart Replay", timeframes.error);
+      return;
+    }
+    this.timeframes = timeframes.data;
+    this.timeframe = this.timeframes.some((t) => t.id === load(TIMEFRAME)) ? load(TIMEFRAME) : "15m";
+
     if (this.key) {
       const existing = await api.getChart(this.key);
       if (existing.ok) {
         this.chart = existing.data;
+        this.timeframe = this.chart.timeframe;
       } else {
         this.key = null;
       }
     }
 
-    if (!this.chart && !(await this.startNew())) return;
+    if (!this.chart) {
+      const started = await api.startChart(this.timeframe);
+      if (!started.ok) {
+        this.root.innerHTML = notice("Couldn't start a chart", started.error);
+        return;
+      }
+      this.key = started.data.key;
+      this.chart = started.data.chart;
+      save(KEY, this.key);
+    }
+
+    this.shown = this.chart.candles.length;
     this.build();
     document.addEventListener("keydown", this.onKey);
   }
 
-  async startNew() {
-    const started = await api.startChart();
-    if (!started.ok) {
-      this.root.innerHTML = notice("Couldn't start a chart", started.error);
-      return false;
-    }
-    this.key = started.data.key;
-    this.chart = started.data.chart;
-    saveKey(this.key);
-    return true;
-  }
-
   close() {
     document.removeEventListener("keydown", this.onKey);
+    clearTimeout(this.replayTimer);
     this.resize?.disconnect();
   }
 
   // ---------- Layout ----------
 
   build() {
-    const buttons = CHOICES.map((c) => `
-      <button type="button" class="predict-${c.id.toLowerCase()}" data-prediction="${c.id}"
-        aria-keyshortcuts="${c.key}">
-        <span class="predict-label">${esc(c.label)}</span>
-        <span class="predict-odds">Up ${signed(pointsIf(c.chance, true))}<br>Down ${signed(pointsIf(c.chance, false))}</span>
+    const tabs = this.timeframes.map((t) => `
+      <button type="button" data-timeframe="${esc(t.id)}" title="${esc(`${t.label} candles, ${t.market.toLowerCase()}`)}">
+        ${esc(t.id)}${t.market === "Forex" ? ' <span class="tf-note">forex</span>' : ""}
       </button>`).join("");
 
     this.root.innerHTML = `
       <div class="chart-game">
         <div class="chart-head">
           <div>
-            <h1>Where does it go next week?</h1>
-            <p>A real currency chart, one candle per week. Which currencies and which years stay
-              hidden until the end, so all you have is the chart.</p>
+            <h1>Up or down?</h1>
+            <p>A real chart, cut off at "now". Call where the price will be when the next
+              <span id="horizon"></span> have passed. The market and the dates stay hidden until you call.</p>
           </div>
           <dl class="stats chart-stats" id="chart-stats"></dl>
         </div>
+
+        <div class="segmented tf-tabs" role="group" aria-label="Candle timeframe" id="tf-tabs">${tabs}</div>
+
         <figure class="panel chart-panel">
           <svg id="chart" role="img"></svg>
-          <figcaption class="empty">Prices shown as an index: the first week closes at 100.</figcaption>
+          <figcaption class="empty">Prices shown as an index: the first candle closes at 100.</figcaption>
         </figure>
-        <div class="predict" id="predict" role="group" aria-label="Your call for next week (keys 1 to 5)">${buttons}</div>
-        <p class="chart-feedback" id="chart-feedback" role="status"></p>
-        <div id="chart-end"></div>
-        <details class="how">
-          <summary>How the points work</summary>
-          <p>Each button says how likely you think an up-week is: Strong bear is 10%, Bear 30%,
-            Not sure 50%, Bull 70%, Strong bull 90%. Being confident and right earns the most, but being
-            confident and wrong costs more than twice as much. "Not sure" always scores zero.</p>
-          <p>That makes honesty the best strategy: over many weeks, the choice that matches what you really
-            believe scores highest. Forecasters call this being <em>calibrated</em>.</p>
-        </details>
+
+        <div class="call-row" id="call-row">
+          <button type="button" class="call call-up" data-call="Up" aria-keyshortcuts="ArrowUp">
+            <span aria-hidden="true">▲</span> Up</button>
+          <button type="button" class="call call-down" data-call="Down" aria-keyshortcuts="ArrowDown">
+            <span aria-hidden="true">▼</span> Down</button>
+        </div>
+
+        <div id="chart-result" role="status" aria-live="polite"></div>
+        <p class="empty keys-hint">Keyboard: ↑ or ↓ to call, Enter for the next chart.</p>
       </div>`;
 
-    this.root.querySelector("#predict").addEventListener("click", (event) => {
-      const button = event.target.closest("[data-prediction]");
-      if (button) this.guess(button.dataset.prediction);
+    this.root.querySelector("#tf-tabs").addEventListener("click", (event) => {
+      const tab = event.target.closest("[data-timeframe]");
+      if (tab && tab.dataset.timeframe !== this.timeframe) this.deal(tab.dataset.timeframe);
+    });
+    this.root.querySelector("#call-row").addEventListener("click", (event) => {
+      const button = event.target.closest("[data-call]");
+      if (button) this.call(button.dataset.call);
     });
 
     this.resize?.disconnect();
-    this.resize = new ResizeObserver(() => this.renderChart(false));
+    this.resize = new ResizeObserver(() => this.renderChart());
     this.resize.observe(this.root.querySelector(".chart-panel"));
     this.render();
   }
 
-  render(fresh = false) {
-    this.renderStats();
-    this.renderChart(fresh);
-    this.renderEnd();
-    const finished = this.chart.reveal !== null;
-    this.root.querySelector("#predict").hidden = finished;
-    this.root.querySelectorAll("[data-prediction]").forEach((b) => {
-      b.disabled = this.busy || finished;
-    });
-  }
-
-  renderStats() {
+  render() {
     const c = this.chart;
-    const round = Math.min(c.roundsPlayed + 1, c.rounds);
+    const called = c.result !== null;
+    const replaying = this.shown < c.candles.length;
+
+    this.root.querySelectorAll("[data-timeframe]").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.timeframe === this.timeframe));
+      b.disabled = this.busy || replaying;
+    });
+    this.root.querySelector("#horizon").textContent = duration(c.timeframe, c.horizon);
+    this.root.querySelector("#call-row").hidden = called;
+    this.root.querySelectorAll("[data-call]").forEach((b) => {
+      b.disabled = this.busy;
+    });
+
+    // Show the old tally while the replay plays, or the counters would give the answer away.
+    const s = replaying && this.statsBefore ? this.statsBefore : c.stats;
     this.root.querySelector("#chart-stats").innerHTML = `
-      <div><dt>Week</dt><dd>${c.reveal ? c.rounds : round} of ${c.rounds}</dd></div>
-      <div><dt>Score</dt><dd class="${trend(c.score)}">${signed(c.score)}</dd></div>`;
+      <div><dt>Right</dt><dd>${s.right}</dd></div>
+      <div><dt>Wrong</dt><dd>${s.wrong}</dd></div>
+      <div><dt>Streak</dt><dd>${s.streak}<small> best ${s.bestStreak}</small></dd></div>`;
+
+    this.renderChart();
+    this.renderResult(replaying);
   }
 
   // ---------- The chart ----------
 
-  renderChart(fresh) {
+  renderChart() {
     const svg = this.root.querySelector("#chart");
+    if (!svg || !this.chart) return;
     const c = this.chart;
-    const candles = c.candles;
-    const slots = c.historyCandles + c.rounds;
+    const all = c.candles;
+    const candles = all.slice(0, this.shown);
+    const slots = c.historyCandles + c.horizon;
+
     // Draw at the real on-screen size, so text stays readable on a phone instead of scaling down.
     const width = Math.max(280, Math.round(svg.getBoundingClientRect().width) || 1000);
     const height = Math.round(Math.min(420, Math.max(240, width * 0.45)));
@@ -166,10 +204,9 @@ class ChartGame {
     const plotWidth = width - axis;
     const pad = 16;
 
-    const lows = candles.map((k) => k.low);
-    const highs = candles.map((k) => k.high);
-    let min = Math.min(...lows);
-    let max = Math.max(...highs);
+    // Scale to everything that will be shown, so nothing jumps while the replay plays.
+    let min = Math.min(...all.map((k) => k.low));
+    let max = Math.max(...all.map((k) => k.high));
     const margin = (max - min) * 0.08 || 50;
     min -= margin;
     max += margin;
@@ -178,126 +215,138 @@ class ChartGame {
     const slot = plotWidth / slots;
     const body = Math.max(2, slot * 0.62);
     const index = (v) => (v / 100).toFixed(1);
+    const f = (n) => n.toFixed(1);
 
     const grid = [0, 1, 2, 3, 4].map((i) => {
       const v = min + ((max - min) * i) / 4;
-      const gy = y(v).toFixed(1);
-      return `<line class="grid" x1="0" x2="${plotWidth}" y1="${gy}" y2="${gy}"></line>
-        <text class="axis" x="${width - 4}" y="${gy}" text-anchor="end" dominant-baseline="middle">${index(v)}</text>`;
+      return `<line class="grid" x1="0" x2="${plotWidth}" y1="${f(y(v))}" y2="${f(y(v))}"></line>
+        <text class="axis" x="${width - 4}" y="${f(y(v))}" text-anchor="end" dominant-baseline="middle">${index(v)}</text>`;
     }).join("");
+
+    const callX = c.historyCandles * slot;
+    const callClose = all[c.historyCandles - 1].close;
+
+    const future = `<rect class="future" x="${f(callX)}" y="0" width="${f(plotWidth - callX)}" height="${height}"></rect>
+      <line class="now" x1="${f(callX)}" x2="${f(callX)}" y1="0" y2="${height}"></line>`;
+
+    const level = c.result
+      ? `<line class="call-level" x1="${f(callX)}" x2="${plotWidth}" y1="${f(y(callClose))}" y2="${f(y(callClose))}"></line>`
+      : `<text class="next" x="${f(callX + (plotWidth - callX) / 2)}" y="${f(height / 2)}" text-anchor="middle" dominant-baseline="middle">?</text>`;
 
     const bars = candles.map((k, i) => {
       const x = i * slot + slot / 2;
       const up = k.close >= k.open;
       const top = y(Math.max(k.open, k.close));
       const h = Math.max(1.5, y(Math.min(k.open, k.close)) - top);
-      const revealedWeek = i >= c.historyCandles;
-      const classes = [up ? "up" : "down", revealedWeek ? "revealed" : "", fresh && i === candles.length - 1 ? "fresh" : ""].join(" ");
-      return `<g class="candle ${classes}">
-        <line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${y(k.high).toFixed(1)}" y2="${y(k.low).toFixed(1)}"></line>
-        <rect x="${(x - body / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${body.toFixed(1)}" height="${h.toFixed(1)}" rx="1"></rect>
+      const fresh = i >= c.historyCandles && i === candles.length - 1 && this.shown < all.length ? " fresh" : "";
+      return `<g class="candle ${up ? "up" : "down"}${fresh}">
+        <line x1="${f(x)}" x2="${f(x)}" y1="${f(y(k.high))}" y2="${f(y(k.low))}"></line>
+        <rect x="${f(x - body / 2)}" y="${f(top)}" width="${f(body)}" height="${f(h)}" rx="1"></rect>
       </g>`;
     }).join("");
 
-    // The line between what's known and what isn't, and the week being guessed.
-    const nowX = candles.length * slot;
-    const future = c.reveal
-      ? ""
-      : `<rect class="future" x="${nowX.toFixed(1)}" y="0" width="${(plotWidth - nowX).toFixed(1)}" height="${height}"></rect>
-         <line class="now" x1="${nowX.toFixed(1)}" x2="${nowX.toFixed(1)}" y1="0" y2="${height}"></line>
-         <text class="next" x="${(nowX + slot / 2).toFixed(1)}" y="${(height / 2).toFixed(1)}" text-anchor="middle" dominant-baseline="middle">?</text>`;
-
-    const startGuessing = c.historyCandles * slot;
-    const marker = `<line class="start-line" x1="${startGuessing.toFixed(1)}" x2="${startGuessing.toFixed(1)}" y1="0" y2="${height}"></line>`;
-
-    svg.innerHTML = `${grid}${future}${marker}${bars}`;
+    svg.innerHTML = `${grid}${future}${level}${bars}`;
 
     const last = candles[candles.length - 1];
-    const previous = candles[candles.length - 2];
-    const change = ((last.close - previous.close) / previous.close) * 100;
-    svg.setAttribute("aria-label",
-      `Chart of ${candles.length} weekly candles. Latest close ${index(last.close)}, ${change >= 0 ? "up" : "down"} ${Math.abs(change).toFixed(2)}% on the week.`);
+    svg.setAttribute("aria-label", `Chart of ${candles.length} ${c.timeframe} candles. Latest close ${index(last.close)}.`);
   }
 
-  // ---------- Guessing ----------
+  // ---------- Playing ----------
 
-  async guess(prediction) {
-    if (this.busy || this.chart.reveal) return;
+  async deal(timeframe) {
+    if (this.busy) return;
     this.busy = true;
+    this.timeframe = timeframe;
+    save(TIMEFRAME, timeframe);
     this.render();
 
-    const result = await api.guessChart(this.key, prediction);
+    const next = await api.nextChart(this.key, timeframe);
     this.busy = false;
-
-    if (!result.ok) {
-      this.feedback(result.error, "down");
+    if (!next.ok) {
+      this.root.querySelector("#chart-result").innerHTML = `<p class="down">${esc(next.error)}</p>`;
       this.render();
       return;
     }
 
-    this.chart = result.data.chart;
-    const g = result.data.guess;
-    const moved = g.move === "Flat"
-      ? "Next week closed exactly where it was."
-      : `Next week went ${g.move === "Up" ? "up" : "down"} ${Math.abs(g.changePercent).toFixed(2)}%.`;
-    this.feedback(`${moved} You said ${labelOf(g.prediction)}: ${signed(g.points)} points.`, trend(g.points));
-    this.render(true);
+    this.chart = next.data;
+    this.shown = this.chart.candles.length;
+    this.render();
   }
 
-  feedback(message, tone) {
-    const el = this.root.querySelector("#chart-feedback");
-    el.textContent = message;
-    el.className = `chart-feedback ${tone ?? ""}`;
+  async call(direction) {
+    if (this.busy || this.chart.result) return;
+    this.busy = true;
+    this.render();
+
+    const response = await api.callChart(this.key, direction);
+    this.busy = false;
+    if (!response.ok) {
+      this.root.querySelector("#chart-result").innerHTML = `<p class="down">${esc(response.error)}</p>`;
+      this.render();
+      return;
+    }
+
+    this.statsBefore = this.chart.stats;
+    this.chart = response.data;
+    this.shown = reducedMotion() ? this.chart.candles.length : this.chart.historyCandles;
+    this.replay();
+  }
+
+  /** Reveals the future one candle at a time: the moment of truth. */
+  replay() {
+    this.render();
+    if (this.shown >= this.chart.candles.length) {
+      this.root.querySelector("#next")?.focus();
+      return;
+    }
+    this.replayTimer = setTimeout(() => {
+      this.shown += 1;
+      this.replay();
+    }, REPLAY_MS);
   }
 
   handleKey(event) {
     if (event.target.closest?.("input, textarea, select") || event.ctrlKey || event.metaKey || event.altKey) return;
-    const choice = CHOICES.find((c) => c.key === event.key);
-    if (choice) this.guess(choice.id);
+    if (!this.chart.result && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      this.call(event.key === "ArrowUp" ? "Up" : "Down");
+    } else if (this.chart.result && event.key === "Enter" && this.shown >= this.chart.candles.length
+      && !event.target.closest?.("button, a")) {
+      this.deal(this.timeframe);
+    }
   }
 
   // ---------- The reveal ----------
 
-  renderEnd() {
-    const el = this.root.querySelector("#chart-end");
-    const r = this.chart.reveal;
-    if (!r) {
-      el.innerHTML = "";
+  renderResult(replaying) {
+    const el = this.root.querySelector("#chart-result");
+    const c = this.chart;
+    if (!c.result || replaying) {
+      el.innerHTML = c.result ? '<p class="chart-wait">Replaying what happened next…</p>' : "";
       return;
     }
 
-    const date = (iso) => new Date(`${iso}T00:00:00Z`)
-      .toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
-    const pair = `${r.symbol.slice(0, 3)}/${r.symbol.slice(3)}`;
-    const plural = (n, word) => `${n} ${n === 1 ? word : `${word}s`}`;
-    const extras = [
-      r.notSure ? `said Not sure ${r.notSure === 1 ? "once" : `${r.notSure} times`}` : "",
-      r.flat ? `${plural(r.flat, "week")} didn't move` : "",
-    ].filter(Boolean);
-    const tally = `You called ${r.right} right and ${r.wrong} wrong${extras.length ? `, and ${extras.join(", and ")}` : ""}.`;
+    const r = c.result;
+    const v = c.reveal;
+    const span = duration(c.timeframe, c.horizon);
+    const verdict = r.correct === null ? "Flat" : r.correct ? "Right" : "Wrong";
+    const move = r.actual === null
+      ? `${v.symbol} ended exactly where it was ${span} later`
+      : `${v.symbol} went ${r.actual === "Up" ? "up" : "down"} ${Math.abs(r.changePercent).toFixed(2)}% over the next ${span}`;
+    const tone = r.correct === null ? "" : r.correct ? "up" : "down";
 
     el.innerHTML = `
-      <section class="panel results chart-reveal" aria-labelledby="reveal-h">
-        <h2 id="reveal-h">It was ${esc(pair)}, ${esc(date(r.firstWeek))} to ${esc(date(r.lastWeek))}</h2>
-        <p>${esc(r.name)}: the real rate went from ${esc(r.firstClose)} to ${esc(r.lastClose)}.</p>
-        <p class="results-value ${trend(this.chart.score)}">${signed(this.chart.score)} points</p>
-        <p>${tally} The best possible score was ${fmt(r.bestPossible)}, by being certain and right every single week.</p>
-        <p class="results-explain">Weekly currency moves are close to a coin flip. Saying "Not sure" when
-          you are is a skill: the players who score well over many charts are the ones who are only
-          confident when they have a reason to be.</p>
+      <section class="panel chart-verdict ${tone}" aria-labelledby="verdict-h">
+        <h2 id="verdict-h">${verdict}. ${esc(move)}.</h2>
+        <p>You called ${r.call === "Up" ? "up" : "down"}. This was ${esc(v.name)},
+          from ${esc(when(v.callTime, c.timeframe))} to ${esc(when(v.endTime, c.timeframe))}:
+          the real price went from ${esc(v.callPrice)} to ${esc(v.endPrice)}.</p>
         <div class="host-controls">
-          <button class="button" type="button" id="again">Play another chart</button>
+          <button class="button" type="button" id="next">Next chart</button>
           <a class="button quiet" href="#/">Back to start</a>
         </div>
       </section>`;
 
-    el.querySelector("#again").addEventListener("click", async () => {
-      saveKey(null);
-      this.chart = null;
-      if (await this.startNew()) {
-        this.build();
-        this.feedback("");
-      }
-    });
+    el.querySelector("#next").addEventListener("click", () => this.deal(this.timeframe));
   }
 }

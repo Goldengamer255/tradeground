@@ -4,8 +4,9 @@ using Tradeground.Game.Charts;
 namespace Tradeground.Api.Charts;
 
 /// <summary>
-/// Chart Replay: a solo game on real historical exchange rates.
-/// POST /api/charts starts a game and returns a secret key; send it as X-Chart-Key afterwards.
+/// Chart Replay: a solo game on real historical charts. Look at the chart, call Up or Down once,
+/// then the next stretch is revealed. POST /api/charts starts a run and returns a secret key;
+/// send it as X-Chart-Key afterwards.
 /// </summary>
 public static class ChartEndpoints
 {
@@ -14,147 +15,184 @@ public static class ChartEndpoints
     public static IEndpointRouteBuilder MapChartEndpoints(this IEndpointRouteBuilder app)
     {
         var charts = app.MapGroup("/api/charts");
+        charts.MapGet("/timeframes", (ChartLibrary library) => library.Timeframes.Select(TimeframeView.From));
         charts.MapPost("/", Start);
         charts.MapGet("/mine", Get);
-        charts.MapPost("/mine/guesses", Guess);
+        charts.MapPost("/mine/next", Next);
+        charts.MapPost("/mine/call", Call);
         return app;
     }
 
-    private static IResult Start(ChartSessionStore store)
+    private static IResult Start(NewChartRequest request, ChartRunStore store)
     {
+        if (!TryTimeframe(store.Library, request.Timeframe, out var timeframe, out var invalid))
+        {
+            return invalid;
+        }
+
         if (store.Start((ulong)Random.Shared.NextInt64()) is not { } started)
         {
             return Results.Problem("Too many games are running right now. Try again in a few minutes.", statusCode: 503);
         }
 
-        return Results.Created("/api/charts/mine", new ChartStarted(started.Key, ChartView.From(started.Session)));
+        var view = store.Use(started.Key, run =>
+        {
+            run.Next(timeframe);
+            return ChartView.From(run);
+        });
+        return Results.Created("/api/charts/mine", new ChartStarted(started.Key, view!));
     }
 
-    private static IResult Get(HttpRequest http, ChartSessionStore store)
+    private static IResult Get(HttpRequest http, ChartRunStore store)
     {
         var view = store.Use(http.Headers[KeyHeader].ToString(), ChartView.From);
         return view is null ? Results.Unauthorized() : Results.Ok(view);
     }
 
-    private static IResult Guess(GuessRequest request, HttpRequest http, ChartSessionStore store)
+    private static IResult Next(NewChartRequest request, HttpRequest http, ChartRunStore store)
     {
-        if (!Enum.IsDefined(request.Prediction))
+        if (!TryTimeframe(store.Library, request.Timeframe, out var timeframe, out var invalid))
+        {
+            return invalid;
+        }
+
+        var view = store.Use(http.Headers[KeyHeader].ToString(), run =>
+        {
+            run.Next(timeframe);
+            return ChartView.From(run);
+        });
+        return view is null ? Results.Unauthorized() : Results.Ok(view);
+    }
+
+    private static IResult Call(CallRequest request, HttpRequest http, ChartRunStore store)
+    {
+        if (!Enum.IsDefined(request.Direction))
         {
             return Results.ValidationProblem(new Dictionary<string, string[]>
             {
-                [nameof(request.Prediction)] = ["Choose StrongBear, Bear, Unsure, Bull or StrongBull."],
+                [nameof(request.Direction)] = ["Call Up or Down."],
             });
         }
 
-        // Check and guess under one lock, so a double-click can't play a round twice.
-        var outcome = store.Use(http.Headers[KeyHeader].ToString(), session =>
+        // Check and call under one lock, so a double-click can't call the same chart twice.
+        var outcome = store.Use(http.Headers[KeyHeader].ToString(), run =>
         {
-            if (session.IsFinished)
+            if (run.Current is not { IsCalled: false })
             {
-                return new GuessOutcome(null);
+                return new CallOutcome(null);
             }
 
-            var result = session.Guess(request.Prediction);
-            return new GuessOutcome(new GuessResponse(GuessView.From(session, result), ChartView.From(session)));
+            run.Call(request.Direction);
+            return new CallOutcome(ChartView.From(run));
         });
 
         return outcome switch
         {
             null => Results.Unauthorized(),
-            { Response: null } => Results.Conflict("This chart is finished. Start a new one."),
-            { Response: var response } => Results.Ok(response),
+            { View: null } => Results.Conflict("You already called this chart. Deal a new one."),
+            { View: var view } => Results.Ok(view),
         };
     }
 
-    /// <summary>Response is null when the game was already over.</summary>
-    private sealed record GuessOutcome(GuessResponse? Response);
+    private static bool TryTimeframe(ChartLibrary library, string? id, out Timeframe timeframe, out IResult invalid)
+    {
+        timeframe = library.Timeframes.FirstOrDefault(t => t.Id == id)!;
+        invalid = Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["Timeframe"] = [$"Choose one of: {string.Join(", ", library.Timeframes.Select(t => t.Id))}."],
+        });
+        return timeframe is not null;
+    }
+
+    /// <summary>View is null when the chart was already called.</summary>
+    private sealed record CallOutcome(ChartView? View);
 }
 
-public sealed record GuessRequest(Prediction Prediction);
+public sealed record NewChartRequest(string? Timeframe);
+
+public sealed record CallRequest(Direction Direction);
 
 public sealed record ChartStarted(string Key, ChartView Chart);
 
-public sealed record GuessResponse(GuessView Guess, ChartView Chart);
+/// <summary>A timeframe the page can offer, and what kind of market it shows.</summary>
+public sealed record TimeframeView(string Id, string Label, string Market)
+{
+    public static TimeframeView From(Timeframe timeframe) =>
+        new(timeframe.Id, timeframe.Label, timeframe == Timeframe.W1 ? "Forex" : "Crypto");
+}
 
-/// <summary>A candle as players see it: rebased to an index, with no date.</summary>
+/// <summary>A candle as players see it: rebased to an index, with no time.</summary>
 public sealed record CandleView(long Open, long High, long Low, long Close)
 {
-    public static CandleView From(ChartSession session, Candle candle)
+    public static CandleView From(ChartRound round, Candle candle)
     {
-        var c = session.Rebase(candle);
+        var c = round.Rebase(candle);
         return new CandleView(c.Open, c.High, c.Low, c.Close);
     }
 }
 
-public sealed record GuessView(int Round, Prediction Prediction, Move Move, int Points, decimal ChangePercent)
+public sealed record RunStats(int Right, int Wrong, int Flat, int Streak, int BestStreak)
 {
-    public static GuessView From(ChartSession session, GuessResult result)
-    {
-        var index = session.Start + ChartSession.HistoryCandles + result.Round - 1;
-        var before = session.Series.Candles[index - 1].Close;
-        var change = Math.Round((result.Revealed.Close - before) * 100m / before, 2);
-        return new GuessView(result.Round, result.Prediction, result.Move, result.Points, change);
-    }
+    public static RunStats From(ChartRun run) => new(run.Right, run.Wrong, run.Flat, run.Streak, run.BestStreak);
+}
+
+public sealed record CallView(Direction Call, Direction? Actual, bool? Correct, decimal ChangePercent)
+{
+    public static CallView From(CallResult result) => new(result.Call, result.Actual, result.Correct, result.ChangePercent);
 }
 
 /// <summary>
-/// Everything the page needs. <see cref="Reveal"/> stays null until the last round, so the pair,
-/// the dates and the real prices can't be read from the network traffic mid-game.
+/// Everything the page needs. Before the call it holds only the history, as an index with no times;
+/// <see cref="Result"/> and <see cref="Reveal"/> stay null, so the market, the dates and the future
+/// can't be read from the network traffic.
 /// </summary>
 public sealed record ChartView(
-    int Rounds,
-    int RoundsPlayed,
-    int Score,
+    string Timeframe,
     int HistoryCandles,
+    int Horizon,
     IReadOnlyList<CandleView> Candles,
-    IReadOnlyList<GuessView> Guesses,
-    ChartReveal? Reveal)
+    CallView? Result,
+    ChartReveal? Reveal,
+    RunStats Stats)
 {
-    public static ChartView From(ChartSession session) =>
-        new(
-            ChartSession.Rounds,
-            session.RoundsPlayed,
-            session.Score,
-            ChartSession.HistoryCandles,
-            session.Visible.Select(c => CandleView.From(session, c)).ToList(),
-            session.Guesses.Select(g => GuessView.From(session, g)).ToList(),
-            session.IsFinished ? ChartReveal.From(session) : null);
+    public static ChartView From(ChartRun run)
+    {
+        var round = run.Current ?? throw new InvalidOperationException("Deal a chart first.");
+        return new ChartView(
+            round.Timeframe.Id,
+            ChartRound.HistoryCandles,
+            ChartRound.Horizon,
+            round.Visible.Select(c => CandleView.From(round, c)).ToList(),
+            round.Result is { } result ? CallView.From(result) : null,
+            round.IsCalled ? ChartReveal.From(round) : null,
+            RunStats.From(run));
+    }
 }
 
-/// <summary>The answer: which market and when, with the real prices.</summary>
+/// <summary>The answer: which market and when, with the real prices at the call and at the end.</summary>
 public sealed record ChartReveal(
     string Symbol,
     string Name,
-    DateOnly FirstWeek,
-    DateOnly LastWeek,
-    string FirstClose,
-    string LastClose,
-    int Right,
-    int Wrong,
-    int NotSure,
-    int Flat,
-    int BestPossible)
+    DateTimeOffset CallTime,
+    DateTimeOffset EndTime,
+    string CallPrice,
+    string EndPrice)
 {
-    public static ChartReveal From(ChartSession session)
+    public static ChartReveal From(ChartRound round)
     {
-        var all = session.All;
-        var guesses = session.Guesses;
+        var candles = round.Visible;
+        var result = round.Result ?? throw new InvalidOperationException("Not called yet.");
+        var decimals = round.Series.Decimals;
         return new ChartReveal(
-            session.Series.Symbol,
-            session.Series.Name,
-            all[0].WeekStart,
-            all[^1].WeekStart,
-            Format(all[0].Close, session.Series.Decimals),
-            Format(all[^1].Close, session.Series.Decimals),
-            // Every round lands in exactly one bucket: right, wrong, "not sure", or a flat week.
-            guesses.Count(g => g.Points > 0),
-            guesses.Count(g => g.Points < 0),
-            guesses.Count(g => g.Prediction == Prediction.Unsure),
-            guesses.Count(g => g.Move == Move.Flat && g.Prediction != Prediction.Unsure),
-            guesses.Count(g => g.Move != Move.Flat) * Scoring.Points(Prediction.StrongBull, Move.Up));
+            round.Series.Symbol,
+            round.Series.Name,
+            candles[ChartRound.HistoryCandles - 1].OpenTime + round.Timeframe.Length,
+            candles[^1].OpenTime + round.Timeframe.Length,
+            Format(result.DecisionClose, decimals),
+            Format(result.EndClose, decimals));
     }
 
     /// <summary>Integer ticks back to a quote: 10850 with 4 decimals is "1.0850".</summary>
     public static string Format(long ticks, int decimals) =>
-        (ticks / (decimal)Math.Pow(10, decimals)).ToString($"F{decimals}", CultureInfo.InvariantCulture);
+        (ticks / (decimal)Math.Pow(10, decimals)).ToString($"N{decimals}", CultureInfo.InvariantCulture);
 }

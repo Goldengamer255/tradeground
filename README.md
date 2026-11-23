@@ -23,19 +23,24 @@ Modes are JSON files in [`src/Tradeground.Game/Modes`](src/Tradeground.Game/Mode
 
 ### Chart Replay (solo practice)
 
-A real currency chart, one candle per week, with the pair and the dates hidden. Each week the player calls
-**Strong bear, Bear, Not sure, Bull or Strong bull**; then the next week is revealed. After 20 weeks the game
-reveals which market and which years it was.
+A real chart, cut off at "now". Pick a timeframe, call **Up** or **Down** once, then watch the next 20 candles
+replay and find out whether you were right, and which market and dates it was. A run keeps your right/wrong
+tally and your streak.
 
-- **Real data, no strings attached.** Weekly candles for six major pairs (EUR/USD, GBP/USD, USD/JPY,
-  AUD/USD, USD/CAD, USD/CHF) from 2000 to today, built from the Federal Reserve's daily H.10 rates, which are
-  public domain. [`tools/Tradeground.ChartData`](tools/Tradeground.ChartData) regenerates the file.
-- **Nothing to peek at.** The server holds the future candles and sends each one only after it is called.
-  Prices are shown as an index starting at 100, so the price level can't give the pair away.
-- **A proper scoring rule.** Each choice states a probability of an up-week (10%, 30%, 50%, 70%, 90%), scored
-  as `100 - (stated% - actual%)² / 25`: +96 for confident and right, -224 for confident and wrong, 0 for
-  "Not sure". The rule is *proper*: over many weeks, saying what you really believe scores best, so the game
-  rewards calibration rather than bravado.
+| Timeframes | Markets | Data |
+|---|---|---|
+| 1m, 15m, 30m, 1h, 4h | BTC, ETH, BNB, XRP against USDT | [Binance public data](https://data.binance.vision), CC BY-NC-SA 4.0 |
+| 1w | EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD, USD/CHF | Federal Reserve H.10 daily rates via FRED, public domain |
+
+- **Many charts from a small file.** Each crypto market and timeframe keeps 160-candle slices from ten different
+  months between 2019 and 2026 (calm markets, crashes, rallies); forex keeps the full weekly history from 2000.
+  [`tools/Tradeground.ChartData`](tools/Tradeground.ChartData) downloads the sources and rebuilds both files.
+- **Nothing to peek at.** The server deals the chart and keeps the future candles until you call. Prices are
+  shown as an index starting at 100 and candles carry no timestamps, so neither the price level nor the dates
+  give the market away.
+- **Checked data.** Every candle is validated at startup (high and low contain open and close, times in order),
+  and a test checks candles are spaced exactly one timeframe apart. Prices are integers end to end; the import
+  refuses any price it would have to round.
 
 ## Architecture
 
@@ -127,9 +132,11 @@ Then check `http://localhost:8080/health` (Docker) or the URL printed by `dotnet
 | DELETE | `/api/rooms/{code}/orders/{id}` | player | Cancel an order |
 | POST | `/api/rooms/{code}/clues` | host | Reveal the next public clue |
 | POST | `/api/rooms/{code}/settlement` | host | End the round and rank players |
-| POST | `/api/charts` | anyone | Start a Chart Replay game; returns a chart key and the first 40 weeks |
-| GET | `/api/charts/mine` | chart player | Current game (for a page refresh) |
-| POST | `/api/charts/mine/guesses` | chart player | Call next week (`{ "prediction": "Bull" }`); reveals it and scores the call |
+| GET | `/api/charts/timeframes` | anyone | Chart Replay timeframes and their market type |
+| POST | `/api/charts` | anyone | Start a run (`{ "timeframe": "15m" }`); returns a chart key and the first chart's history |
+| GET | `/api/charts/mine` | chart player | Current chart (for a page refresh) |
+| POST | `/api/charts/mine/call` | chart player | Call it (`{ "direction": "Up" }`); reveals the next 20 candles, the market and the dates |
+| POST | `/api/charts/mine/next` | chart player | Deal a new chart on any timeframe |
 
 Players send `X-Trader-Key`; hosts send `X-Host-Key`; Chart Replay sends `X-Chart-Key`.
 Real-time updates: connect to `/hubs/market`, call `Subscribe(code)`, then listen for
@@ -143,7 +150,7 @@ Real-time updates: connect to `/hubs/market`, call `Subscribe(code)`, then liste
 | Property-based tests (invariants over random order flow) | FsCheck | Every push |
 | Model-based test (optimised book vs. a simple model) | FsCheck | Every push |
 | Integration tests (real app over HTTP and SignalR) | WebApplicationFactory | Every push |
-| Chart data checks (every candle valid, in order) | Validated at startup and in tests | Every push |
+| Chart data checks (every candle valid, in order, evenly spaced) | Validated at startup and in tests | Every push |
 | Benchmarks (orders/sec, allocations) | BenchmarkDotNet | Nightly |
 
 Invariants checked on random sessions: the book is never crossed; every order is fully
@@ -168,8 +175,13 @@ dotnet run -c Release --project benchmarks/Tradeground.Benchmarks
 
 ## Data and third-party assets
 
-Chart Replay data: Board of Governors of the Federal Reserve System (US), H.10 Foreign Exchange Rates,
-retrieved from [FRED](https://fred.stlouisfed.org/), Federal Reserve Bank of St. Louis. Public domain.
+Chart Replay data:
+- Forex: Board of Governors of the Federal Reserve System (US), H.10 Foreign Exchange Rates, retrieved from
+  [FRED](https://fred.stlouisfed.org/), Federal Reserve Bank of St. Louis. Public domain.
+- Crypto: [Binance public market data](https://data.binance.vision), licensed
+  [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). The derived file
+  `src/Tradeground.Game/Charts/crypto-intraday.json` is shared under the same license. Because of the
+  non-commercial term, a paid version of Tradeground would need a different intraday data source.
 
 Vendored in `src/Tradeground.Api/wwwroot/lib`, each under its own license:
 [SignalR JavaScript client](https://github.com/dotnet/aspnetcore) (MIT),

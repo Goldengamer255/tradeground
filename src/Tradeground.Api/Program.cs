@@ -19,7 +19,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(_ => ModeCatalog.LoadBuiltIn());
 builder.Services.AddSingleton<RoomRegistry>();
 builder.Services.AddSingleton(_ => ChartLibrary.LoadBuiltIn());
-builder.Services.AddSingleton<ChartSessionStore>();
+builder.Services.AddSingleton<ChartRunStore>();
 builder.Services.AddProblemDetails();
 builder.Services.AddHealthChecks();
 

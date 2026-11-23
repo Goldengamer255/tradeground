@@ -55,7 +55,8 @@ export const revealClue = (code, hostKey) => request("POST", `${room(code)}/clue
 export const settle = (code, hostKey) => request("POST", `${room(code)}/settlement`, { hostKey });
 
 // Chart Replay (solo).
-export const startChart = () => request("POST", "/api/charts");
+export const getTimeframes = () => request("GET", "/api/charts/timeframes");
+export const startChart = (timeframe) => request("POST", "/api/charts", { body: { timeframe } });
 export const getChart = (chartKey) => request("GET", "/api/charts/mine", { chartKey });
-export const guessChart = (chartKey, prediction) =>
-  request("POST", "/api/charts/mine/guesses", { chartKey, body: { prediction } });
+export const nextChart = (chartKey, timeframe) => request("POST", "/api/charts/mine/next", { chartKey, body: { timeframe } });
+export const callChart = (chartKey, direction) => request("POST", "/api/charts/mine/call", { chartKey, body: { direction } });
