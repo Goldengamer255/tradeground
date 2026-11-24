@@ -3,6 +3,7 @@
 #   docker build -f src/Tradeground.Api/Dockerfile -t tradeground-api .
 
 # ---- Stage 1: build with the full SDK (~800 MB, thrown away afterwards) ----
+# Publishing the API also publishes the Blazor browser app (Tradeground.Web) into its wwwroot.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /repo
 
@@ -11,6 +12,8 @@ WORKDIR /repo
 COPY Directory.Build.props Directory.Packages.props ./
 COPY src/Tradeground.Engine/Tradeground.Engine.csproj src/Tradeground.Engine/
 COPY src/Tradeground.Game/Tradeground.Game.csproj src/Tradeground.Game/
+COPY src/Tradeground.Contracts/Tradeground.Contracts.csproj src/Tradeground.Contracts/
+COPY src/Tradeground.Web/Tradeground.Web.csproj src/Tradeground.Web/
 COPY src/Tradeground.Api/Tradeground.Api.csproj src/Tradeground.Api/
 RUN dotnet restore src/Tradeground.Api/Tradeground.Api.csproj
 

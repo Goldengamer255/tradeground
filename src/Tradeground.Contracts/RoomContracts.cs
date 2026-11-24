@@ -1,10 +1,24 @@
 using Tradeground.Engine;
-using Tradeground.Game;
 
-namespace Tradeground.Api.Endpoints;
+namespace Tradeground.Contracts;
 
-// Wire contracts (DTOs). Kept separate from domain types so the API shape can stay stable
-// while the engine changes, and so nothing secret (trader keys, hidden dice) ever leaks out.
+// Market Maker: the shapes of the room API. Domain types never cross the wire directly; the API maps
+// them to these, so nothing secret (trader keys, hidden dice) can leak by accident.
+
+public enum Audience
+{
+    /// <summary>Younger players: friendly goods, plain language, simple controls.</summary>
+    Explorer,
+
+    /// <summary>Teens and adults: real terminology and the full order book.</summary>
+    Trader,
+}
+
+public enum RoomPhase
+{
+    Trading,
+    Settled,
+}
 
 /// <summary>
 /// Everything a client needs to draw a mode. The dice SHAPE (count, sides, value per pip) is public:
@@ -24,35 +38,14 @@ public sealed record ModeSummary(
     int RoundSeconds,
     int DiceCount,
     int DiceSides,
-    long ValuePerPip)
-{
-    public static ModeSummary From(GameMode mode) =>
-        new(
-            mode.Id,
-            mode.Name,
-            mode.Audience,
-            mode.Description,
-            mode.Asset.DisplayName,
-            mode.Asset.Symbol,
-            mode.Asset.Unit,
-            mode.StartingCash,
-            mode.MaxPosition,
-            mode.MaxOrderQuantity,
-            mode.RoundSeconds,
-            mode.HiddenValue.DiceCount,
-            mode.HiddenValue.DiceSides,
-            mode.HiddenValue.ValuePerPip);
-}
+    long ValuePerPip);
 
-public sealed record CreateRoomRequest(string ModeId, ulong? Seed);
+public sealed record CreateRoomRequest(string ModeId, ulong? Seed = null);
 
 public sealed record CreateRoomResponse(string Code, string HostKey, string ModeId);
 
 /// <summary>A revealed die. <see cref="Die"/> is 1-based, as players see it.</summary>
-public sealed record ClueView(int Die, int Value, string Text)
-{
-    public static ClueView From(Clue clue) => new(clue.DieIndex + 1, clue.Value, clue.Text);
-}
+public sealed record ClueView(int Die, int Value, string Text);
 
 public sealed record JoinRoomResponse(
     string TraderKey,
@@ -74,19 +67,13 @@ public sealed record PlaceOrderResponse(
     string? RejectReason);
 
 /// <summary>What everyone sees on the trade tape: no trader identities.</summary>
-public sealed record PublicTrade(long Sequence, long Price, long Quantity, Side AggressorSide)
-{
-    public static PublicTrade From(Trade trade) => new(trade.Sequence, trade.Price, trade.Quantity, trade.AggressorSide);
-}
+public sealed record PublicTrade(long Sequence, long Price, long Quantity, Side AggressorSide);
 
-public sealed record OpenOrderView(long OrderId, Side Side, long Price, long Remaining)
-{
-    public static OpenOrderView From(Order order) => new(order.Id, order.Side, order.Price, order.Remaining);
-}
+public sealed record OpenOrderView(long OrderId, Side Side, long Price, long Remaining);
 
 /// <summary>
-/// A player's private view. Includes the name and clue so a player who refreshes the page can
-/// carry on with nothing but their trader key.
+/// A player's private view. Includes the name and clue so a player who refreshes the page can carry
+/// on with nothing but their trader key.
 /// </summary>
 public sealed record AccountView(
     string DisplayName,
@@ -94,6 +81,11 @@ public sealed record AccountView(
     long Cash,
     long Position,
     IReadOnlyList<OpenOrderView> OpenOrders);
+
+public sealed record PlayerResultView(int Rank, string DisplayName, long Cash, long Position, long ProfitAndLoss);
+
+/// <summary>The end of a round: the true value, every die (no longer secret) and the ranking.</summary>
+public sealed record SettlementView(long TrueValue, IReadOnlyList<int> Dice, IReadOnlyList<PlayerResultView> Results);
 
 /// <summary>The public state of a room: enough for anyone arriving late to catch up.</summary>
 public sealed record RoomView(
@@ -103,4 +95,4 @@ public sealed record RoomView(
     int PlayerCount,
     IReadOnlyList<ClueView> PublicClues,
     IReadOnlyList<PublicTrade> RecentTrades,
-    Settlement? Settlement);
+    SettlementView? Settlement);

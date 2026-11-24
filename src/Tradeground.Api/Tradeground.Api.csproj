@@ -1,5 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Tradeground.Game\Tradeground.Game.csproj" />
+    <ProjectReference Include="..\Tradeground.Contracts\Tradeground.Contracts.csproj" />
+    <!-- The browser app: building or publishing the API includes its files. -->
+    <ProjectReference Include="..\Tradeground.Web\Tradeground.Web.csproj" />
   </ItemGroup>
 </Project>

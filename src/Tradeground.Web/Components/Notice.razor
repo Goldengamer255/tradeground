@@ -1,0 +1,14 @@
+@* A full-page message: room not found, round over, something went wrong. *@
+<section class="page">
+    <div class="notice">
+        <h1>@Title</h1>
+        <p>@Body</p>
+        <div class="cta">@ChildContent</div>
+    </div>
+</section>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter, EditorRequired] public string Body { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

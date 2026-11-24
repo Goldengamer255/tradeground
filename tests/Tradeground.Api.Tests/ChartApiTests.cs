@@ -4,8 +4,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Tradeground.Api.Charts;
+using Tradeground.Contracts;
 using Tradeground.Game.Charts;
+using Direction = Tradeground.Contracts.Direction;
 
 namespace Tradeground.Api.Tests;
 
@@ -145,7 +146,7 @@ public sealed class ChartApiTests(WebApplicationFactory<Program> factory) : ICla
     private static HttpRequestMessage Get(string url, string key)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, new Uri(url, UriKind.Relative));
-        request.Headers.Add(ChartEndpoints.KeyHeader, key);
+        request.Headers.Add(ApiHeaders.ChartKey, key);
         return request;
     }
 
@@ -155,7 +156,7 @@ public sealed class ChartApiTests(WebApplicationFactory<Program> factory) : ICla
         {
             Content = JsonContent.Create(body, body.GetType(), options: Json),
         };
-        request.Headers.Add(ChartEndpoints.KeyHeader, key);
+        request.Headers.Add(ApiHeaders.ChartKey, key);
         return await client.SendAsync(request);
     }
 }

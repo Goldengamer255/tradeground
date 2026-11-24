@@ -1,0 +1,75 @@
+@implements IDisposable
+@inject IJSRuntime JS
+
+@*
+    The home page's moving chart: a new candle prints every second, so the page feels alive.
+    It's a generated example (labelled as one), not real market data.
+*@
+<figure class="live-card">
+    <div class="live-head">
+        <span class="pill"><span class="pulse" aria-hidden="true"></span>Example chart</span>
+        <span>
+            <span class="live-price">@Format.Index(candles[^1].Close)</span>
+            <span class="@(change >= 0 ? "up" : "down")">@Format.Percent(change)</span>
+        </span>
+    </div>
+    <CandleChart Candles="candles" Slots="Window" NowSlot="Window" ShowNowLine="false" Compact="true" FreshIndex="@(candles.Count - 1)" />
+    <figcaption class="live-foot">
+        <strong>Up or down next?</strong>
+        <span>Every candle is one slice of time</span>
+    </figcaption>
+</figure>
+
+@code {
+    private const int Window = 40;
+    private readonly Random random = new(7);
+    private readonly List<CandleView> candles = [];
+    private Timer? timer;
+    private decimal change;
+
+    protected override void OnInitialized()
+    {
+        var price = 10_000L;
+        for (var i = 0; i < Window - 6; i++)
+        {
+            price = AddCandle(price);
+        }
+
+        UpdateChange();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && !await JS.InvokeAsync<bool>("tradeground.prefersReducedMotion"))
+        {
+            timer = new Timer(_ => InvokeAsync(Tick), null, 1000, 1000);
+        }
+    }
+
+    private void Tick()
+    {
+        AddCandle(candles[^1].Close);
+        if (candles.Count > Window)
+        {
+            candles.RemoveAt(0);
+        }
+
+        UpdateChange();
+        StateHasChanged();
+    }
+
+    /// <summary>A small random walk with a slight upward drift.</summary>
+    private long AddCandle(long open)
+    {
+        var close = open + (long)((random.NextDouble() - 0.47) * 60);
+        var high = Math.Max(open, close) + (long)(random.NextDouble() * 30);
+        var low = Math.Min(open, close) - (long)(random.NextDouble() * 30);
+        candles.Add(new CandleView(open, high, low, close));
+        return close;
+    }
+
+    private void UpdateChange() =>
+        change = Math.Round((candles[^1].Close - candles[0].Open) * 100m / candles[0].Open, 2);
+
+    public void Dispose() => timer?.Dispose();
+}

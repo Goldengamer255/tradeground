@@ -1,0 +1,123 @@
+@*
+    A candlestick chart drawn as SVG straight from C#.
+    The SVG stretches to fill its box (preserveAspectRatio="none"); lines keep a constant thickness
+    (vector-effect in CSS). Axis labels are HTML next to it, so text stays sharp at any size. Gridlines
+    sit at fixed fractions of the height, so the labels can use fixed CSS classes (no inline styles).
+*@
+<div class="chart">
+    <div class="chart-plot @(Compact ? "compact" : "")">
+        <svg viewBox="0 0 @Width @Height" preserveAspectRatio="none" role="img" aria-label="@Description">
+            @foreach (var fraction in GridFractions)
+            {
+                <line class="grid-line" x1="0" x2="@Width" y1="@F(fraction * Height)" y2="@F(fraction * Height)" />
+            }
+
+            @if (ShowFuture)
+            {
+                <rect class="future-zone" x="@F(NowX)" y="0" width="@F(Width - NowX)" height="@Height" />
+            }
+
+            @if (ShowNowLine)
+            {
+                <line class="now-line" x1="@F(NowX)" x2="@F(NowX)" y1="0" y2="@Height" />
+            }
+
+            @if (CallLevel is { } level)
+            {
+                <line class="call-level" x1="@F(NowX)" x2="@Width" y1="@F(Y(level))" y2="@F(Y(level))" />
+            }
+
+            @for (var i = 0; i < Candles.Count; i++)
+            {
+                var k = Candles[i];
+                var x = (i * Slot) + (Slot / 2);
+                var top = Y(Math.Max(k.Open, k.Close));
+                var bodyHeight = Math.Max(Height * 0.006, Y(Math.Min(k.Open, k.Close)) - top);
+                var css = $"candle {(k.Close >= k.Open ? "up" : "down")}{(i == FreshIndex ? " fresh" : "")}";
+                <g class="@css">
+                    <line x1="@F(x)" x2="@F(x)" y1="@F(Y(k.High))" y2="@F(Y(k.Low))" />
+                    <rect x="@F(x - (Body / 2))" y="@F(top)" width="@F(Body)" height="@F(bodyHeight)" rx="1" />
+                </g>
+            }
+        </svg>
+        @if (ShowFuture)
+        {
+            <div class="future-q" aria-hidden="true">?</div>
+        }
+    </div>
+    <div class="chart-axis" aria-hidden="true">
+        @for (var i = 0; i < GridFractions.Length; i++)
+        {
+            <span class="y@(i)">@Format.Index(LabelAt(GridFractions[i]))</span>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Candles to draw, rebased so 10000 means 100.00.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<CandleView> Candles { get; set; } = [];
+
+    /// <summary>How many candle slots the width holds (history plus future), so candles don't jump around.</summary>
+    [Parameter] public int Slots { get; set; } = 80;
+
+    /// <summary>The slot where "now" is: the dashed line, and where the shaded future starts.</summary>
+    [Parameter] public int NowSlot { get; set; } = 60;
+
+    [Parameter] public bool ShowFuture { get; set; }
+    [Parameter] public bool ShowNowLine { get; set; } = true;
+
+    /// <summary>Draws a dashed level at this price from "now" onward (the price at the call).</summary>
+    [Parameter] public long? CallLevel { get; set; }
+
+    /// <summary>The candle that just appeared, which gets a small grow-in animation.</summary>
+    [Parameter] public int? FreshIndex { get; set; }
+
+    /// <summary>
+    /// Every candle the chart will show, including ones not drawn yet, so the price scale doesn't
+    /// jump while a replay adds candles. Defaults to <see cref="Candles"/>.
+    /// </summary>
+    [Parameter] public IReadOnlyList<CandleView>? ScaleTo { get; set; }
+
+    [Parameter] public bool Compact { get; set; }
+
+    private const double Width = 800;
+    private const double Height = 1000;
+
+    // Must match the .y0 to .y4 positions in app.css.
+    private static readonly double[] GridFractions = [0.08, 0.29, 0.50, 0.71, 0.92];
+
+    private double min;
+    private double max;
+
+    private double Slot => Width / Slots;
+    private double Body => Math.Max(Slot * 0.62, 1.5);
+    private double NowX => NowSlot * Slot;
+
+    protected override void OnParametersSet()
+    {
+        var scale = ScaleTo is { Count: > 0 } ? ScaleTo : Candles;
+        if (scale.Count == 0)
+        {
+            (min, max) = (9_900, 10_100);
+            return;
+        }
+
+        min = scale.Min(c => c.Low);
+        max = scale.Max(c => c.High);
+        if (max - min < 1)
+        {
+            (min, max) = (min - 50, max + 50);
+        }
+    }
+
+    /// <summary>Price to height: the highest price sits at the top gridline (8%), the lowest at the bottom (92%).</summary>
+    private double Y(double price) => Height * (0.08 + (0.84 * (max - price) / (max - min)));
+
+    private decimal LabelAt(double fraction) => (decimal)(max - ((fraction - 0.08) / 0.84 * (max - min)));
+
+    private string Description => Candles.Count == 0
+        ? "Empty chart"
+        : $"Chart of {Candles.Count} candles. Latest close {Format.Index(Candles[^1].Close)}.";
+
+    private static string F(double value) => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+}

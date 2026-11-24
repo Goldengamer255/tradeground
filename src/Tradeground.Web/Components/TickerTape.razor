@@ -1,0 +1,37 @@
+@inject TradegroundApi Api
+
+@*
+    A scrolling tape of REAL moves from the chart library ("BTC/USDT Mar 2020 1h −8.4%"). They come
+    only from chart history before "now", so the tape never hints at an Up or Down answer.
+    The list is written twice so the scroll can loop seamlessly.
+*@
+@if (highlights.Length > 0)
+{
+    <div class="ticker" aria-label="Big moves from the charts in Tradeground">
+        <div class="ticker-track" aria-hidden="true">
+            @for (var copy = 0; copy < 2; copy++)
+            {
+                @foreach (var h in highlights)
+                {
+                    <span class="ticker-item">
+                        <b>@h.Symbol</b>
+                        @Format.Month(h.When) on @h.Timeframe
+                        <span class="@(h.ChangePercent >= 0 ? "tk-up" : "tk-down")">
+                            @(h.ChangePercent >= 0 ? "▲" : "▼") @Format.Percent(h.ChangePercent)
+                        </span>
+                    </span>
+                }
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private ChartHighlight[] highlights = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        var result = await Api.GetHighlights();
+        highlights = result.Data ?? [];
+    }
+}

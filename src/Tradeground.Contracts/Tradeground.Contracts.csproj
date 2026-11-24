@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The shapes the API and the browser app exchange, shared by both so they can never disagree.
+    Deliberately does NOT reference Tradeground.Game: that assembly holds the chart data (including the
+    future candles) and the hidden dice logic, and anything referenced here ships to the browser.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\Tradeground.Engine\Tradeground.Engine.csproj" />
+  </ItemGroup>
+</Project>
