@@ -1231,12 +1231,6 @@ div.level {
   padding: 0 0.9rem;
 }
 
-.tf-note {
-  font-size: 0.7rem;
-  font-weight: 500;
-  opacity: 0.8;
-}
-
 .chart-stats {
   grid-template-columns: repeat(3, auto);
 }

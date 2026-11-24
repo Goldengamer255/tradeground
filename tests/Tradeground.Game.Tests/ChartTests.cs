@@ -45,56 +45,60 @@ public sealed class ChartLibraryTests
     private static readonly ChartLibrary Library = ChartLibrary.LoadBuiltIn();
 
     [Fact]
-    public void Every_requested_timeframe_has_charts()
+    public void Ships_many_moments_across_four_markets()
     {
-        Library.Timeframes.Select(t => t.Id).ShouldBe(new[] { "1m", "15m", "30m", "1h", "4h", "1w" });
+        Library.Moments.Count.ShouldBeGreaterThanOrEqualTo(100);
+        Library.Moments.Select(m => m.Symbol).Distinct().ShouldBe(new[] { "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT" });
+        Library.Source.ShouldContain("CC BY-NC-SA 4.0");
     }
 
+    /// <summary>The heart of "one chart, many timeframes": every zoom level ends at the same instant and price.</summary>
     [Fact]
-    public void Intraday_charts_are_crypto_and_weekly_charts_are_forex()
+    public void Every_timeframe_of_a_moment_ends_at_the_same_now_and_price()
     {
-        Library.SeriesFor(Timeframe.H1).Select(s => s.Symbol).ShouldBe(new[] { "BTC/USDT", "ETH/USDT", "BNB/USDT", "XRP/USDT" });
-        Library.SeriesFor(Timeframe.W1).Select(s => s.Symbol)
-            .ShouldBe(new[] { "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "USD/CHF" });
-    }
-
-    [Fact]
-    public void Candles_are_spaced_by_their_timeframe()
-    {
-        foreach (var timeframe in Library.Timeframes.Where(t => t != Timeframe.W1))
+        foreach (var moment in Library.Moments)
         {
-            foreach (var segment in Library.SeriesFor(timeframe).SelectMany(s => s.Segments))
+            foreach (var timeframe in ChartLibrary.Timeframes)
             {
-                // Exchanges occasionally pause, so allow a rare gap, but never candles closer than the timeframe.
-                var gaps = segment.Zip(segment.Skip(1), (a, b) => b.OpenTime - a.OpenTime).ToList();
-                gaps.ShouldAllBe(g => g >= timeframe.Length);
-                gaps.Count(g => g == timeframe.Length).ShouldBeGreaterThan(gaps.Count * 9 / 10, $"{timeframe.Id} candles should be evenly spaced");
+                var frame = moment.Frame(timeframe);
+                frame.Count.ShouldBe(ChartMoment.CandlesPerFrame);
+                frame[ChartMoment.HistoryCandles].OpenTime.ShouldBe(moment.Now);
+                frame[ChartMoment.HistoryCandles - 1].Close.ShouldBe(moment.PriceNow);
             }
         }
     }
 
     [Fact]
-    public void Sources_are_credited()
+    public void A_moment_with_a_gap_is_rejected()
     {
-        Library.Sources.ShouldContain(s => s.Contains("Federal Reserve", StringComparison.Ordinal));
-        Library.Sources.ShouldContain(s => s.Contains("CC BY-NC-SA 4.0", StringComparison.Ordinal));
+        var good = Library.Moments[0];
+        var broken = good.Frame(Timeframe.H1).ToList();
+        broken[10] = broken[10] with { OpenTime = broken[10].OpenTime.AddMinutes(5) };
+        var frames = good.Frames.ToDictionary(f => f.Key, f => f.Value);
+        frames[Timeframe.H1.Id] = broken;
+
+        Should.Throw<InvalidOperationException>(() => ChartLibrary.Validate(good with { Frames = frames }))
+            .Message.ShouldContain("1h");
     }
 }
 
 public sealed class ChartRoundTests
 {
     private static readonly ChartLibrary Library = ChartLibrary.LoadBuiltIn();
-    private static readonly DateTimeOffset T0 = new(2024, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Now = new(2024, 1, 12, 12, 0, 0, TimeSpan.Zero);
 
-    /// <summary>A hand-made chart: flat at 100 for the history, then a straight line to <paramref name="end"/>.</summary>
+    /// <summary>A hand-made moment: flat at 100 until "now", then a straight line to <paramref name="end"/> on every timeframe.</summary>
     private static ChartRound RoundEndingAt(long end)
     {
-        var candles = Enumerable.Range(0, ChartRound.TotalCandles)
-            .Select(i => i < ChartRound.HistoryCandles ? 100L : 100 + ((end - 100) * (i - ChartRound.HistoryCandles + 1) / ChartRound.Horizon))
-            .Select((price, i) => new Candle(T0.AddHours(i), price, price, price, price))
-            .ToList();
-        var series = new ChartSeries("TEST", "Test", Timeframe.H1.Id, 0, [candles]);
-        return new ChartRound(series, Timeframe.H1, candles, start: 0);
+        var frames = ChartLibrary.Timeframes.ToDictionary(
+            t => t.Id,
+            t => (IReadOnlyList<Candle>)Enumerable.Range(0, ChartMoment.CandlesPerFrame)
+                .Select(i => i < ChartMoment.HistoryCandles ? 100L : 100 + ((end - 100) * (i - ChartMoment.HistoryCandles + 1) / ChartMoment.FutureCandles))
+                .Select((price, i) => new Candle(Now + (t.Length * (i - ChartMoment.HistoryCandles)), price, price, price, price))
+                .ToList());
+        var moment = new ChartMoment("TEST", "Test", 0, Now, frames);
+        ChartLibrary.Validate(moment);
+        return new ChartRound(moment);
     }
 
     [Theory]
@@ -104,52 +108,53 @@ public sealed class ChartRoundTests
     [InlineData(80, Direction.Up, false)]
     public void A_call_is_right_when_the_price_ends_on_that_side(long end, Direction call, bool right)
     {
-        RoundEndingAt(end).Call(call).Correct.ShouldBe(right);
+        RoundEndingAt(end).Call(call, Timeframe.M15).Correct.ShouldBe(right);
     }
 
     [Fact]
     public void A_flat_ending_is_neither_right_nor_wrong()
     {
-        var result = RoundEndingAt(100).Call(Direction.Up);
+        var result = RoundEndingAt(100).Call(Direction.Up, Timeframe.H1);
 
         result.Correct.ShouldBeNull();
         result.Actual.ShouldBeNull();
     }
 
     [Fact]
-    public void The_future_is_hidden_until_the_call()
+    public void The_call_looks_ahead_20_candles_of_the_timeframe_it_was_made_on()
+    {
+        RoundEndingAt(120).Call(Direction.Up, Timeframe.M1).Horizon.ShouldBe(TimeSpan.FromMinutes(20));
+        RoundEndingAt(120).Call(Direction.Up, Timeframe.H4).Horizon.ShouldBe(TimeSpan.FromHours(80));
+    }
+
+    [Fact]
+    public void The_future_is_hidden_on_every_timeframe_until_the_call()
     {
         var round = RoundEndingAt(120);
 
-        round.Visible.Count.ShouldBe(ChartRound.HistoryCandles);
-        round.Call(Direction.Up);
-        round.Visible.Count.ShouldBe(ChartRound.TotalCandles);
+        ChartLibrary.Timeframes.ShouldAllBe(t => round.Visible(t).Count == ChartMoment.HistoryCandles);
+        round.Call(Direction.Up, Timeframe.M30);
+        ChartLibrary.Timeframes.ShouldAllBe(t => round.Visible(t).Count == ChartMoment.CandlesPerFrame, "after the call, every zoom level shows what happened");
     }
 
     [Fact]
     public void A_chart_can_only_be_called_once()
     {
         var round = RoundEndingAt(120);
-        round.Call(Direction.Up);
+        round.Call(Direction.Up, Timeframe.M1);
 
-        Should.Throw<InvalidOperationException>(() => round.Call(Direction.Down));
+        Should.Throw<InvalidOperationException>(() => round.Call(Direction.Down, Timeframe.H4));
     }
 
     [Fact]
-    public void Prices_are_shown_as_an_index_starting_at_100()
+    public void Now_is_shown_as_100_on_every_timeframe()
     {
-        var round = ChartRound.Pick(Library, Timeframe.M15, new DeterministicRandom(3));
+        var round = ChartRound.Pick(Library, new DeterministicRandom(3));
 
-        round.Rebase(round.Visible[0]).Close.ShouldBe(ChartRound.IndexBase);
-    }
-
-    [Fact]
-    public void The_same_seed_deals_the_same_chart()
-    {
-        var a = ChartRound.Pick(Library, Timeframe.H4, new DeterministicRandom(2026));
-        var b = ChartRound.Pick(Library, Timeframe.H4, new DeterministicRandom(2026));
-
-        (a.Series.Symbol, a.Visible[0]).ShouldBe((b.Series.Symbol, b.Visible[0]));
+        foreach (var timeframe in ChartLibrary.Timeframes)
+        {
+            round.Rebase(round.Visible(timeframe)[^1]).Close.ShouldBe(ChartRound.IndexBase, timeframe.Id);
+        }
     }
 }
 
@@ -160,10 +165,10 @@ public sealed class ChartRunTests
     [Fact]
     public void Calling_before_dealing_is_refused()
     {
-        Should.Throw<InvalidOperationException>(() => new ChartRun(Library, 1).Call(Direction.Up));
+        Should.Throw<InvalidOperationException>(() => new ChartRun(Library, 1).Call(Direction.Up, Timeframe.M1));
     }
 
-    /// <summary>For any run of charts on any timeframes, the tally always adds up and streaks make sense.</summary>
+    /// <summary>For any run of charts called on any timeframes, the tally always adds up and streaks make sense.</summary>
     [Property(MaxTest = 100)]
     public void The_tally_always_adds_up(ulong seed, byte[] plays)
     {
@@ -172,8 +177,9 @@ public sealed class ChartRunTests
 
         foreach (var play in (plays ?? []).Take(40))
         {
-            run.Next(Library.Timeframes[play % Library.Timeframes.Count]);
-            var result = run.Call((play & 0x80) == 0 ? Direction.Up : Direction.Down);
+            run.Next();
+            var timeframe = ChartLibrary.Timeframes[play % ChartLibrary.Timeframes.Count];
+            var result = run.Call((play & 0x80) == 0 ? Direction.Up : Direction.Down, timeframe);
             calls++;
 
             result.Correct.ShouldBe(result.Actual is null ? null : result.Actual == result.Call);

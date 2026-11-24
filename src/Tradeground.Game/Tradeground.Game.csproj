@@ -5,7 +5,6 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Modes\*.mode.json" />
-    <EmbeddedResource Include="Charts\fx-weekly.json" LogicalName="Tradeground.Game.Charts.fx-weekly.json" />
-    <EmbeddedResource Include="Charts\crypto-intraday.json" LogicalName="Tradeground.Game.Charts.crypto-intraday.json" />
+    <EmbeddedResource Include="Charts\crypto-moments.json" LogicalName="Tradeground.Game.Charts.crypto-moments.json" />
   </ItemGroup>
 </Project>

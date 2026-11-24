@@ -1,6 +1,6 @@
-// Chart Replay: a real chart, cut off at "now". Call Up or Down once, then watch the next stretch
-// replay and find out which market and when it was. The server holds the future; this page only
-// receives it after the call.
+// Up or Down: one real chart, cut off at "now". The timeframe tabs zoom in and out on that SAME
+// chart. Call Up or Down on the timeframe you're viewing, then watch what happened next and find
+// out which market and when it was. The server holds the future; this page only gets it after the call.
 
 import * as api from "./api.js";
 import { howToButton, showHowToFirstTime } from "./howto.js";
@@ -31,8 +31,7 @@ function save(name, value) {
 
 /** 20 candles of 15 minutes -> "5 hours". */
 function duration(timeframe, candles) {
-  const minutes = { "1m": 1, "15m": 15, "30m": 30, "1h": 60, "4h": 240, "1w": 10080 }[timeframe] * candles;
-  if (minutes % 10080 === 0) return plural(minutes / 10080, "week");
+  const minutes = { "1m": 1, "15m": 15, "30m": 30, "1h": 60, "4h": 240 }[timeframe] * candles;
   if (minutes < 60) return plural(minutes, "minute");
   const hours = minutes / 60;
   if (hours < 48) return plural(hours, "hour");
@@ -43,11 +42,9 @@ function duration(timeframe, candles) {
 
 const plural = (n, word) => `${n} ${n === 1 ? word : `${word}s`}`;
 
-function when(iso, timeframe) {
-  const options = timeframe === "1w"
-    ? { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }
-    : { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", hourCycle: "h23" };
-  return new Date(iso).toLocaleString("en-GB", options) + (timeframe === "1w" ? "" : " UTC");
+function when(iso) {
+  const options = { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC", hourCycle: "h23" };
+  return `${new Date(iso).toLocaleString("en-GB", options)} UTC`;
 }
 
 export async function openChart(root) {
@@ -77,10 +74,9 @@ class ChartGame {
     this.timeframe = this.timeframes.some((t) => t.id === load(TIMEFRAME)) ? load(TIMEFRAME) : "15m";
 
     if (this.key) {
-      const existing = await api.getChart(this.key);
+      const existing = await api.getChart(this.key, this.timeframe);
       if (existing.ok) {
         this.chart = existing.data;
-        this.timeframe = this.chart.timeframe;
       } else {
         this.key = null;
       }
@@ -113,17 +109,14 @@ class ChartGame {
 
   build() {
     const tabs = this.timeframes.map((t) => `
-      <button type="button" data-timeframe="${esc(t.id)}" title="${esc(`${t.label} candles, ${t.market.toLowerCase()}`)}">
-        ${esc(t.id)}${t.market === "Forex" ? ' <span class="tf-note">forex</span>' : ""}
-      </button>`).join("");
+      <button type="button" data-timeframe="${esc(t.id)}" title="${esc(`Each candle is ${t.label}`)}">${esc(t.id)}</button>`).join("");
 
     this.root.innerHTML = `
       <div class="chart-game">
         <div class="chart-head">
           <div>
             <div class="game-title"><h1>Up or down?</h1>${howToButton("up-or-down")}</div>
-            <p>A real chart, cut off at "now". Call where the price will be when the next
-              <span id="horizon"></span> have passed. The market and the dates stay hidden until you call.</p>
+            <p id="chart-question"></p>
           </div>
           <dl class="stats chart-stats" id="chart-stats"></dl>
         </div>
@@ -132,7 +125,7 @@ class ChartGame {
 
         <figure class="panel chart-panel">
           <svg id="chart" role="img"></svg>
-          <figcaption class="empty">Prices shown as an index: the first candle closes at 100.</figcaption>
+          <figcaption class="empty">The same chart on every timeframe. Prices are shown as an index where "now" is 100.</figcaption>
         </figure>
 
         <div class="call-row" id="call-row">
@@ -148,7 +141,7 @@ class ChartGame {
 
     this.root.querySelector("#tf-tabs").addEventListener("click", (event) => {
       const tab = event.target.closest("[data-timeframe]");
-      if (tab && tab.dataset.timeframe !== this.timeframe) this.deal(tab.dataset.timeframe);
+      if (tab && tab.dataset.timeframe !== this.timeframe) this.zoom(tab.dataset.timeframe);
     });
     this.root.querySelector("#call-row").addEventListener("click", (event) => {
       const button = event.target.closest("[data-call]");
@@ -170,7 +163,11 @@ class ChartGame {
       b.setAttribute("aria-pressed", String(b.dataset.timeframe === this.timeframe));
       b.disabled = this.busy || replaying;
     });
-    this.root.querySelector("#horizon").textContent = duration(c.timeframe, c.horizon);
+    this.root.querySelector("#chart-question").innerHTML = called
+      ? "Switch timeframes to see what happened at every zoom level."
+      : `A real chart, stopped at "now". Zoom in and out with the timeframes, then call it:
+        will the price be higher or lower <strong>${esc(duration(c.timeframe, c.horizon))}</strong> from now?
+        The market and dates stay hidden until you call.`;
     this.root.querySelector("#call-row").hidden = called;
     this.root.querySelectorAll("[data-call]").forEach((b) => {
       b.disabled = this.busy;
@@ -255,14 +252,34 @@ class ChartGame {
 
   // ---------- Playing ----------
 
-  async deal(timeframe) {
+  /** Shows the current chart at another timeframe. Looking never changes the game. */
+  async zoom(timeframe) {
     if (this.busy) return;
     this.busy = true;
     this.timeframe = timeframe;
     save(TIMEFRAME, timeframe);
     this.render();
 
-    const next = await api.nextChart(this.key, timeframe);
+    const view = await api.getChart(this.key, timeframe);
+    this.busy = false;
+    if (!view.ok) {
+      this.root.querySelector("#chart-result").innerHTML = `<p class="down">${esc(view.error)}</p>`;
+      this.render();
+      return;
+    }
+
+    this.chart = view.data;
+    this.shown = this.chart.candles.length;
+    this.render();
+  }
+
+  /** Deals a brand-new chart, keeping the timeframe the player is on. */
+  async deal() {
+    if (this.busy) return;
+    this.busy = true;
+    this.render();
+
+    const next = await api.nextChart(this.key, this.timeframe);
     this.busy = false;
     if (!next.ok) {
       this.root.querySelector("#chart-result").innerHTML = `<p class="down">${esc(next.error)}</p>`;
@@ -280,7 +297,7 @@ class ChartGame {
     this.busy = true;
     this.render();
 
-    const response = await api.callChart(this.key, direction);
+    const response = await api.callChart(this.key, direction, this.timeframe);
     this.busy = false;
     if (!response.ok) {
       this.root.querySelector("#chart-result").innerHTML = `<p class="down">${esc(response.error)}</p>`;
@@ -315,7 +332,7 @@ class ChartGame {
       this.call(event.key === "ArrowUp" ? "Up" : "Down");
     } else if (this.chart.result && event.key === "Enter" && this.shown >= this.chart.candles.length
       && !event.target.closest?.("button, a")) {
-      this.deal(this.timeframe);
+      this.deal();
     }
   }
 
@@ -331,7 +348,8 @@ class ChartGame {
 
     const r = c.result;
     const v = c.reveal;
-    const span = duration(c.timeframe, c.horizon);
+    // The verdict belongs to the timeframe the call was made on, whichever tab is open now.
+    const span = duration(r.timeframe, c.horizon);
     const verdict = r.correct === null ? "Flat" : r.correct ? "Right" : "Wrong";
     const move = r.actual === null
       ? `${v.symbol} ended exactly where it was ${span} later`
@@ -341,15 +359,15 @@ class ChartGame {
     el.innerHTML = `
       <section class="panel chart-verdict ${tone}" aria-labelledby="verdict-h">
         <h2 id="verdict-h">${verdict}. ${esc(move)}.</h2>
-        <p>You called ${r.call === "Up" ? "up" : "down"}. This was ${esc(v.name)},
-          from ${esc(when(v.callTime, c.timeframe))} to ${esc(when(v.endTime, c.timeframe))}:
-          the real price went from ${esc(v.callPrice)} to ${esc(v.endPrice)}.</p>
+        <p>You called ${r.call === "Up" ? "up" : "down"} on the ${esc(r.timeframe)} chart. This was ${esc(v.name)},
+          from ${esc(when(v.now))} to ${esc(when(v.decidedAt))}:
+          the real price went from ${esc(v.priceNow)} to ${esc(v.endPrice)}.</p>
         <div class="host-controls">
           <button class="button" type="button" id="next">Next chart</button>
           <a class="button quiet" href="#/">Back to start</a>
         </div>
       </section>`;
 
-    el.querySelector("#next").addEventListener("click", () => this.deal(this.timeframe));
+    el.querySelector("#next").addEventListener("click", () => this.deal());
   }
 }

@@ -6,12 +6,12 @@ import { esc } from "./ui.js";
 export const GUIDES = {
   "up-or-down": {
     title: "How to play Up or Down",
-    intro: "You see a real price chart from the past, stopped at \"now\". Guess where the price goes next.",
+    intro: "You see a real crypto price chart from the past, stopped at \"now\". Guess where the price goes next.",
     steps: [
-      "Pick a timeframe. On \"15m\", each candle is 15 minutes of trading; on \"1w\", each is a week.",
+      "Use the timeframes to zoom in and out. It's the same chart every time: on \"1m\" each candle is one minute, on \"4h\" each is four hours. Zoom out to see the big trend, zoom in to see the last hour.",
       "Read the chart. Each candle is one slice of time: blue means the price went up during it, orange means it went down. The thin line shows the highest and lowest price in that slice.",
-      "Press Up if you think the price will be higher 20 candles from now, or Down if you think it will be lower.",
-      "Watch the next 20 candles play out. Then you find out if you were right, and which market and dates it was.",
+      "Press Up if you think the price will be higher 20 candles from now, or Down if lower. Your call uses the timeframe you're looking at, so on \"1m\" that's 20 minutes ahead and on \"4h\" it's 3 days and 8 hours.",
+      "Watch the next 20 candles play out. Then you find out if you were right, and which market and dates it was. You can still switch timeframes to see what happened at every zoom level.",
     ],
     note: "Nobody gets this right every time, including professionals. Pay attention to how often it feels like a coin flip: that is a real lesson about markets.",
   },

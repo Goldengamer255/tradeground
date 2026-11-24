@@ -2,7 +2,7 @@ namespace Tradeground.Game.Charts;
 
 /// <summary>
 /// One candle. Like everything with money in Tradeground, prices are integers: the quote times
-/// 10^decimals (EUR/USD 1.0850 with 4 decimals is 10850; BTC/USDT 64,250.17 with 2 is 6425017).
+/// 10^decimals (BTC/USDT 64,250.17 with 2 decimals is 6425017).
 /// </summary>
 public readonly record struct Candle(DateTimeOffset OpenTime, long Open, long High, long Low, long Close)
 {
@@ -19,22 +19,33 @@ public sealed record Timeframe(string Id, string Label, TimeSpan Length)
     public static readonly Timeframe H4 = new("4h", "4 hours", TimeSpan.FromHours(4));
     public static readonly Timeframe W1 = new("1w", "1 week", TimeSpan.FromDays(7));
 
-    /// <summary>Shortest first: the order the page shows them in.</summary>
-    public static readonly IReadOnlyList<Timeframe> All = [M1, M15, M30, H1, H4, W1];
+    /// <summary>The zoom levels every Up or Down chart has, shortest first.</summary>
+    public static readonly IReadOnlyList<Timeframe> Intraday = [M1, M15, M30, H1, H4];
 
-    public static Timeframe? Find(string? id) => All.FirstOrDefault(t => t.Id == id);
+    public static Timeframe? Find(string? id) => Intraday.FirstOrDefault(t => t.Id == id);
 }
 
 /// <summary>
-/// One market on one timeframe. History is stored as SEGMENTS: unbroken runs of candles taken from
-/// different periods, so a small file still gives many different-looking charts.
+/// One market frozen at one moment, seen at every timeframe. Each frame holds the candles just
+/// before <see cref="Now"/> (the history) and just after it (the future), so switching timeframe
+/// zooms in or out on the SAME chart instead of showing a different one.
 /// </summary>
-public sealed record ChartSeries(
+public sealed record ChartMoment(
     string Symbol,
     string Name,
-    string Timeframe,
     int Decimals,
-    IReadOnlyList<IReadOnlyList<Candle>> Segments);
+    DateTimeOffset Now,
+    IReadOnlyDictionary<string, IReadOnlyList<Candle>> Frames)
+{
+    public const int HistoryCandles = 60;
+    public const int FutureCandles = 20;
+    public const int CandlesPerFrame = HistoryCandles + FutureCandles;
+
+    public IReadOnlyList<Candle> Frame(Timeframe timeframe) => Frames[timeframe.Id];
+
+    /// <summary>The price at "now": the close of the last history candle. Identical on every timeframe.</summary>
+    public long PriceNow => Frame(Timeframe.M1)[HistoryCandles - 1].Close;
+}
 
 public static class WeeklyCandles
 {
@@ -43,8 +54,8 @@ public static class WeeklyCandles
     /// high and low = the extremes of the week. Days must be in date order.
     /// </summary>
     /// <remarks>
-    /// The Fed publishes one rate per day (the noon buying rate in New York), so these candles
-    /// show the range of daily rates, not every tick: real intraday wicks would be longer.
+    /// Used for the Federal Reserve forex data, which has one price per day (the noon buying rate
+    /// in New York), so these candles show the range of daily rates, not every tick.
     /// </remarks>
     public static IReadOnlyList<Candle> FromDaily(IEnumerable<(DateOnly Date, long Price)> daily)
     {
