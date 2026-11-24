@@ -188,18 +188,40 @@ is zero; position limits always hold; settlement P&L sums to zero.
 dotnet run -c Release --project benchmarks/Tradeground.Benchmarks
 ```
 
+## Deployment
+
+Tradeground runs on **Azure Container Apps** in New Zealand North, described as code in
+[`infra/`](infra) (Bicep) and shipped by the same pipeline that tests it:
+
+```
+push to main → build and test → build the Docker image → publish to ghcr.io (tagged with the commit)
+             → az deployment group create (infra/main.bicep) → check /health on the live site
+```
+
+- **No stored cloud password.** The deploy job signs in to Azure with OpenID Connect: GitHub issues
+  a short-lived token for this repo's `production` environment, which only `main` may use, and a
+  managed identity in Azure trusts exactly that. Its rights cover one resource group
+  ([`infra/github-access.bicep`](infra/github-access.bicep), applied once by hand).
+- **One replica, scale to zero.** Rooms live in memory, so a second copy would split players
+  across servers; at most one runs, and none when nobody is playing (the first visitor waits a few
+  seconds while it starts).
+- **Costs nothing.** The smallest container size, no paid log storage and a public image on GitHub's
+  free registry keep it within the free allowance.
+
 ## Roadmap
 
 - [x] Matching engine, game rules, REST + SignalR API, tests, CI, Docker
 - [x] Web frontend (Explorer and Trader views)
 - [x] Front end rebuilt in C# with Blazor WebAssembly, with a livelier design
+- [x] Azure Container Apps deployment with Bicep and a passwordless (OIDC) deploy pipeline
+- [ ] Optional accounts (ASP.NET Core Identity, PostgreSQL via EF Core) to save stats and streaks
+- [ ] Trade Through History: solo, against computer traders, or with friends
 - [ ] Market-maker bots
 - [ ] Round timer, automatic clue schedule, room clean-up
 - [ ] Postgres persistence and event-sourced replays; Redis SignalR backplane
 - [ ] Playwright end-to-end tests, Testcontainers integration tests, load tests
 - [ ] Daily Challenge, leaderboards, ratings, achievements
 - [ ] Post-game coach (adverse selection, inventory risk, spread capture)
-- [ ] AWS deployment (ECR, ECS Fargate, RDS, ElastiCache) with Terraform and a deploy pipeline
 
 ## Data and third-party assets
 

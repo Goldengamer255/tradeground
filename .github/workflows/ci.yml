@@ -8,10 +8,16 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch cancels the older, now-pointless run.
+env:
+  IMAGE: ghcr.io/goldengamer255/tradeground
+  # Only a push to main is a release: it publishes the image and deploys it. Pull requests just check.
+  RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+# On a pull request, a newer push cancels the older, now-pointless run. On main, runs finish in
+# order, so a deploy is never cut off halfway.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -44,10 +50,80 @@ jobs:
           path: TestResults
 
   docker:
-    name: Docker image builds
+    name: Docker image
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # to publish the image to GitHub Container Registry on main
     steps:
       - uses: actions/checkout@v7
-      - name: Build API image
-        run: docker build --file src/Tradeground.Api/Dockerfile --tag tradeground-api:${{ github.sha }} .
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Sign in to GitHub Container Registry
+        if: env.RELEASE == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tagged with the commit, so every deploy points at exactly one version of the code
+      # and rolling back means deploying an older tag.
+      - name: Build the image (and publish it on main)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: src/Tradeground.Api/Dockerfile
+          push: ${{ env.RELEASE == 'true' }}
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+
+  deploy:
+    name: Deploy to Azure
+    needs: docker
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write # lets the job ask GitHub for the short-lived token Azure checks (no stored password)
+    steps:
+      - uses: actions/checkout@v7
+
+      # Azure downloads the image without a password, so the package must be public. GitHub makes a
+      # new package private, so on the very first deploy this stops with instructions instead of hanging.
+      - name: Check the image is public
+        run: |
+          repo="${IMAGE#ghcr.io/}"
+          if ! token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull" | jq -r .token) ||
+             ! curl -fsS -o /dev/null -H "Authorization: Bearer $token" \
+               -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json" \
+               "https://ghcr.io/v2/$repo/manifests/${{ github.sha }}"; then
+            echo "::error::Azure can't download $IMAGE. On GitHub open the tradeground package, choose Package settings, change visibility to Public, then re-run this job."
+            exit 1
+          fi
+
+      - name: Sign in to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Apply infra/main.bicep with the new image
+        id: deploy
+        run: |
+          url=$(az deployment group create             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}"             --template-file infra/main.bicep             --parameters image="$IMAGE:${{ github.sha }}"             --query properties.outputs.url.value --output tsv)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: Check the live site answers
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            if curl --fail --silent --show-error "${{ steps.deploy.outputs.url }}/health"; then exit 0; fi
+            sleep 10
+          done
+          echo "The site did not answer /health after a minute."
+          exit 1
