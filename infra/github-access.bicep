@@ -10,7 +10,10 @@
 
 param location string = resourceGroup().location
 
-param repository string = 'Goldengamer255/tradeground'
+// GitHub names the repo in the token with its owner's and its own permanent IDs as well as their names
+// (gh api repos/Goldengamer255/tradeground --jq '.owner.id, .id'). The IDs never change, so a repo
+// deleted and re-created under the same name by someone else could never match this credential.
+param repository string = 'Goldengamer255@168153584/tradeground@1466479461'
 
 @description('The GitHub environment the deploy job uses. Only main may deploy to it (set in the repo settings).')
 param environmentName string = 'production'
